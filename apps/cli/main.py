@@ -59,32 +59,54 @@ def config_show():
 
 
 @apply_app.command("demo")
-def apply_demo(limit: int = typer.Option(1, help="Limit demo items"), dry_run: bool = True):
-    """Run a placeholder demo of the application flow.
+def apply_demo(
+    limit: int = typer.Option(1, help="Maximum number of demo items to stage."),
+    dry_run: bool = typer.Option(True, "--dry-run/--live", help="Force dry-run guardrails."),
+    no_browser: bool = typer.Option(
+        False,
+        "--no-browser",
+        help="Skip launching Chrome app-mode; server still runs.",
+    ),
+    port: Optional[int] = typer.Option(
+        None,
+        "--port",
+        min=1024,
+        max=65535,
+        help="Override preview server port (defaults to config value).",
+    ),
+):
+    """Run a complete dry-run demo of the application preview flow."""
 
-    This command simulates a dry-run of the job application process
-    to demonstrate the flow without taking real action.
-
-    Args:
-        limit (int): The number of demo items to process.
-        dry_run (bool): If True, runs in simulation mode.
-    """
-    settings = Settings.load(overrides={"dry_run": dry_run})
+    overrides: dict[str, object] = {"dry_run": dry_run}
+    if port is not None:
+        overrides["preview_port"] = port
+    settings = Settings.load(overrides=overrides)
     store = RunStore()
     record = store.start_demo_run(profile_id=settings.active_profile)
+    store.bootstrap_demo_preview(record, limit=limit, profile_id=settings.active_profile)
     log_event(
         {
             "event": "run.demo_initialized",
             "message": "Demo run directory prepared with redacted logging.",
             "limit": limit,
-            "dryRun": dry_run,
+            "dryRun": True,
+        }
+    )
+    log_event(
+        {
+            "event": "guardrail.demo.no_network",
+            "message": "Demo mode disables Browser-Use navigation and SimplyHired traffic.",
+            "domains": ["*.simplyhired.com"],
+            "mode": "demo",
         }
     )
     context = get_run_context()
+    writer = HistoryWriter()
     if context:
-        HistoryWriter().append_demo_entry(
+        writer.append_demo_entry(
             context,
-            summary="Demo run initialized; actions.log will contain redacted events.",
+            summary="Demo run initialized; preview interactions remain local-only.",
+            decision="initialized",
         )
     typer.echo(
         json.dumps(
@@ -93,10 +115,20 @@ def apply_demo(limit: int = typer.Option(1, help="Limit demo items"), dry_run: b
                 "run_dir": str(record.run_dir),
                 "actions_log": str(record.logs_path),
                 "limit": limit,
-                "dry_run": dry_run,
+                "dry_run": True,
+                "preview_port": settings.preview_port,
             },
             ensure_ascii=False,
         )
+    )
+    run_preview_service(
+        settings,
+        demo=True,
+        open_browser=not no_browser,
+        run_record=record,
+        run_store=store,
+        history_writer=writer,
+        run_context=context,
     )
 
 
@@ -122,7 +154,8 @@ def preview_demo(
         overrides["preview_port"] = port
     settings = Settings.load(overrides=overrides)
     run_store = RunStore()
-    run_store.start_demo_run(profile_id=settings.active_profile)
+    record = run_store.start_demo_run(profile_id=settings.active_profile)
+    run_store.bootstrap_demo_preview(record, limit=1, profile_id=settings.active_profile)
     log_event(
         {
             "event": "preview.demo_initialized",
@@ -130,16 +163,34 @@ def preview_demo(
             "port": settings.preview_port,
         }
     )
+    log_event(
+        {
+            "event": "guardrail.demo.no_network",
+            "message": "Preview demo enforces dry-run guardrails; no SimplyHired navigation will occur.",
+            "domains": ["*.simplyhired.com"],
+            "mode": "demo",
+        }
+    )
     context = get_run_context()
+    writer = HistoryWriter()
     if context:
-        HistoryWriter().append_demo_entry(
+        writer.append_demo_entry(
             context,
             summary="Preview demo session initialized; UI interactions will be redacted.",
+            decision="initialized",
         )
     typer.echo(
         f"Starting preview server on http://localhost:{settings.preview_port}/ui (demo mode, dry-run)."
     )
-    run_preview_service(settings, demo=True, open_browser=not no_browser)
+    run_preview_service(
+        settings,
+        demo=True,
+        open_browser=not no_browser,
+        run_record=record,
+        run_store=run_store,
+        history_writer=writer,
+        run_context=context,
+    )
 
 
 @profiles_app.command("new")

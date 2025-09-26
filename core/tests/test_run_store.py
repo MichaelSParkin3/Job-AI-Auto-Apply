@@ -36,6 +36,13 @@ def test_run_store_creates_seeded_run(tmp_path: Path, monkeypatch: pytest.Monkey
     assert data["id"] == record.id
     assert data["profileId"] == "demo-profile"
     assert data["logsPath"].endswith("actions.log")
+    assert data["status"] == "review"
+    assert data["preview"]["summary"]
+    assert data["preview"]["decision"] == "pending"
+    assert data["metadata"]["profileLabel"] == "Demo Profile"
+    assert data["metadata"]["mode"] == "demo"
+    screenshot_path = Path(data["preview"]["screenshotPath"])
+    assert screenshot_path.exists()
 
     log_event(
         {
@@ -61,7 +68,11 @@ def test_history_writer_appends_redacted_summary(
     context = get_run_context()
     assert context is not None
     writer = HistoryWriter(base=tmp_path)
-    writer.append_demo_entry(context, summary="Call +1 555-123-4567 to confirm.")
+    writer.append_demo_entry(
+        context,
+        summary="Call +1 555-123-4567 to confirm.",
+        decision="initialized",
+    )
 
     history_lines = writer.history_path.read_text(encoding="utf-8").splitlines()
     assert history_lines, "history.jsonl should accumulate entries"
@@ -87,3 +98,12 @@ def test_preview_demo_records_history(tmp_path: Path, monkeypatch: pytest.Monkey
     assert entry["status"] == "skipped"
     assert entry["runPath"].startswith(str((tmp_path / "runs").resolve()))
     assert "Preview demo session" in entry["summary"]
+
+    actions_log = tmp_path / "runs"
+    run_dir = next(actions_log.iterdir())
+    guardrail_events = [
+        json.loads(line)
+        for line in (run_dir / "actions.log").read_text(encoding="utf-8").splitlines()
+        if "guardrail.demo.no_network" in line
+    ]
+    assert guardrail_events, "guardrail event should be recorded in actions.log"

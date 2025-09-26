@@ -7,6 +7,7 @@ import { PreviewCard } from "./components/preview-card";
 import { PreviewToolbar } from "./components/preview-toolbar";
 import { Toaster, toast } from "./components/ui/use-toast";
 import { usePreviewStore } from "./store/preview-store";
+import type { PreviewStatus } from "./store/preview-store";
 
 const useKeyboardShortcuts = (
   handlers: Record<string, () => void>,
@@ -27,9 +28,19 @@ const useKeyboardShortcuts = (
 };
 
 const App: React.FC = () => {
-  const { runId, status, preview, dryRun, set, message } = usePreviewStore();
+  const { runId, status, preview, dryRun, metadata, set, message } =
+    usePreviewStore();
   const [editOpen, setEditOpen] = React.useState(false);
   const isBusy = status === "loading" || status === "editing";
+
+  const toPreviewStatus = React.useCallback(
+    (value: string | undefined, fallback: PreviewStatus): PreviewStatus => {
+      if (!value) return fallback;
+      if (value === "review") return "ready";
+      return value as PreviewStatus;
+    },
+    []
+  );
 
   React.useEffect(() => {
     let mounted = true;
@@ -40,9 +51,10 @@ const App: React.FC = () => {
         if (!mounted) return;
         set({
           runId: data.runId,
-          status: "ready",
+          status: toPreviewStatus(data.status, "ready"),
           dryRun: data.dryRun,
           preview: data.preview,
+          metadata: data.metadata,
         });
       } catch (error) {
         const description = error instanceof Error ? error.message : String(error);
@@ -57,13 +69,18 @@ const App: React.FC = () => {
 
   const handleApprove = React.useCallback(async () => {
     if (!runId) return;
-    set({ status: "loading" });
+    set({ status: "loading", message: undefined });
     try {
-      await approveRun(runId);
-      set({ status: "approved" });
+      const result = await approveRun(runId);
+      set({
+        status: toPreviewStatus(result.status, "approved"),
+        preview: result.preview ?? preview,
+        metadata: result.metadata ?? metadata,
+      });
       toast({
         title: "Preview approved",
-        description: "Submission will remain in dry-run mode.",
+        description:
+          result.message ?? "Submission will remain in dry-run mode.",
       });
     } catch (error) {
       const description = error instanceof Error ? error.message : String(error);
@@ -74,17 +91,22 @@ const App: React.FC = () => {
         variant: "destructive",
       });
     }
-  }, [runId, set]);
+  }, [metadata, preview, runId, set, toPreviewStatus]);
 
   const handleAbort = React.useCallback(async () => {
     if (!runId) return;
-    set({ status: "loading" });
+    set({ status: "loading", message: undefined });
     try {
-      await abortRun(runId);
-      set({ status: "aborted" });
+      const result = await abortRun(runId);
+      set({
+        status: toPreviewStatus(result.status, "aborted"),
+        preview: result.preview ?? preview,
+        metadata: result.metadata ?? metadata,
+      });
       toast({
         title: "Preview aborted",
-        description: "Dry run halted without sending a submission.",
+        description:
+          result.message ?? "Dry run halted without sending a submission.",
       });
     } catch (error) {
       const description = error instanceof Error ? error.message : String(error);
@@ -95,19 +117,25 @@ const App: React.FC = () => {
         variant: "destructive",
       });
     }
-  }, [runId, set]);
+  }, [metadata, preview, runId, set, toPreviewStatus]);
 
   const handleEditSubmit = React.useCallback(
     async (text: string) => {
       if (!runId) return;
-      set({ status: "editing" });
+      set({ status: "editing", message: undefined });
       try {
-        await editRun(runId, text);
-        const updatedPreview = preview ? { ...preview, edits: text } : preview;
-        set({ status: "editing", preview: updatedPreview });
+        const result = await editRun(runId, text);
+        const updatedPreview =
+          result.preview ?? (preview ? { ...preview, edits: text } : preview);
+        set({
+          status: toPreviewStatus(result.status, "ready"),
+          preview: updatedPreview,
+          metadata: result.metadata ?? metadata,
+        });
         toast({
           title: "Edit captured",
-          description: "Preview updated with your manual note.",
+          description:
+            result.message ?? "Preview updated with your manual note.",
         });
       } catch (error) {
         const description = error instanceof Error ? error.message : String(error);
@@ -121,7 +149,7 @@ const App: React.FC = () => {
         setEditOpen(false);
       }
     },
-    [preview, runId, set]
+    [metadata, preview, runId, set, toPreviewStatus]
   );
 
   useKeyboardShortcuts(
@@ -161,6 +189,9 @@ const App: React.FC = () => {
               summary={preview.summary}
               notes={preview.notes ?? preview.edits}
               dryRun={dryRun}
+              decision={preview.decision}
+              decidedAt={preview.decidedAt}
+              metadata={metadata}
             />
           </>
         )}

@@ -12,6 +12,9 @@ from typing import Optional, TYPE_CHECKING, Any
 import typer
 
 from apps.cli.config_loader import Settings, get_base_dir
+from apps.cli.history_store import HistoryWriter
+from apps.cli.run_store import RunRecord, RunStore
+from apps.cli.runtime_state import RunContext, set_run_context
 from apps.preview import create_app
 
 if TYPE_CHECKING:
@@ -52,7 +55,16 @@ def _launch_browser(url: str, settings: Settings) -> Optional[subprocess.Popen]:
     return None
 
 
-def run_preview_service(settings: Settings, *, demo: bool = True, open_browser: bool = True) -> None:
+def run_preview_service(
+    settings: Settings,
+    *,
+    demo: bool = True,
+    open_browser: bool = True,
+    run_record: RunRecord | None = None,
+    run_store: RunStore | None = None,
+    history_writer: HistoryWriter | None = None,
+    run_context: RunContext | None = None,
+) -> None:
     """Run the preview FastAPI service with optional Chrome app-mode launcher."""
 
     # Defer uvicorn import so that test environments without the dependency can still import CLI modules.
@@ -62,7 +74,14 @@ def run_preview_service(settings: Settings, *, demo: bool = True, open_browser: 
 
     base_dir = get_base_dir()
     static_dir = base_dir / "apps" / "ui" / "dist"
-    app = create_app(static_dir=static_dir, demo=demo)
+    app = create_app(
+        static_dir=static_dir,
+        demo=demo,
+        run_record=run_record,
+        run_store=run_store,
+        history_writer=history_writer,
+        run_context=run_context,
+    )
 
     config: "Config" = uvicorn.Config(
         app,
@@ -73,7 +92,12 @@ def run_preview_service(settings: Settings, *, demo: bool = True, open_browser: 
     )
     server: "Server" = uvicorn.Server(config)
 
-    server_thread = threading.Thread(target=server.run, daemon=True)
+    def _run_server() -> None:
+        if run_context:
+            set_run_context(run_context)
+        server.run()
+
+    server_thread = threading.Thread(target=_run_server, daemon=True)
     server_thread.start()
 
     started_attr = getattr(server, "started", None)
@@ -93,6 +117,10 @@ def run_preview_service(settings: Settings, *, demo: bool = True, open_browser: 
 
     try:
         while server_thread.is_alive():
+            if getattr(app.state, "session_complete", False):
+                typer.echo("Preview session complete; shutting down preview server.")
+                server.should_exit = True
+                break
             time.sleep(0.5)
     except KeyboardInterrupt:
         typer.echo("Shutting down preview server...")

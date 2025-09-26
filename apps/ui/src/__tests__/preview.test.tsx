@@ -12,6 +12,11 @@ const mockPreviewResponse = {
     summary: "Placeholder summary for testing",
     notes: "Keyboard shortcuts active.",
   },
+  metadata: {
+    profileId: "demo",
+    startedAt: "2025-01-01T00:00:00Z",
+    limit: 1,
+  },
 };
 
 type FetchMock = ReturnType<typeof vi.fn> & typeof fetch;
@@ -33,7 +38,9 @@ describe("Preview App", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(mockResponse(mockPreviewResponse))
-      .mockResolvedValueOnce(mockResponse({ ok: true }));
+      .mockResolvedValueOnce(
+        mockResponse({ ok: true, status: "approved", message: "Approved" })
+      );
 
     // @ts-expect-error setting global fetch for jsdom
     global.fetch = fetchMock as FetchMock;
@@ -47,6 +54,7 @@ describe("Preview App", () => {
     expect(
       screen.getByAltText(/Preview screenshot before submission/)
     ).toBeInTheDocument();
+    expect(screen.getByText(/Demo profile/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Approve/i }));
 
@@ -61,7 +69,9 @@ describe("Preview App", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(mockResponse(mockPreviewResponse))
-      .mockResolvedValueOnce(mockResponse({ ok: true }));
+      .mockResolvedValueOnce(
+        mockResponse({ ok: true, status: "approved", message: "Approved" })
+      );
 
     // @ts-expect-error setting global fetch for jsdom
     global.fetch = fetchMock as FetchMock;
@@ -85,7 +95,9 @@ describe("Preview App", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(mockResponse(mockPreviewResponse))
-      .mockResolvedValueOnce(mockResponse({ ok: true }));
+      .mockResolvedValueOnce(
+        mockResponse({ ok: true, status: "aborted", message: "Aborted" })
+      );
 
     // @ts-expect-error setting global fetch for jsdom
     global.fetch = fetchMock as FetchMock;

@@ -1,8 +1,8 @@
 # Job-AI-Auto-Apply
 
-Local-first, review-first automation for job applications. This repo currently ships a minimal CLI scaffold and config loader, with a roadmap for a Preview server (FastAPI) and a React UI that lets you approve/decline edits before anything is submitted.
+Local-first, review-first automation for job applications. This repo now ships the end-to-end dry-run demo experience: a Typer CLI that boots a FastAPI preview service, serves a React UI, and lets you approve/decline edits before anything is submitted.
 
-Status: Story 1.3 (Profile schema & commands) implemented.
+Status: Story 1.5 (Dry-run demo flow) implemented.
 
 ## Why
 - Privacy by default: runs on your machine; artifacts stored locally
@@ -11,6 +11,7 @@ Status: Story 1.3 (Profile schema & commands) implemented.
 
 ## Features (current)
 - Typer CLI with subcommands: `apply`, `profiles`, `config`, `history`
+- FastAPI preview service that launches alongside the CLI demo flow and serves the React UI on http://localhost:4950/ui
 - Config loader with precedence: CLI > profile marker > profile YAML > global `config/config.yaml`
 - Idempotent `config init` + runtime folders (`config/`, `data/profiles/`, `data/resumes/`, `.local/browser/profiles/`, `.local/state/`, `runs/`, `history/`)
 - Profile management commands (`profiles new|validate|list|use|current`) with Pydantic schema enforcement
@@ -24,7 +25,8 @@ Status: Story 1.3 (Profile schema & commands) implemented.
 ### Prerequisites
 - Windows 10/11
 - Python 3.11+
-- (For UI later) Node.js 22 LTS + pnpm 9, Chrome stable
+- Node.js 22 LTS + pnpm 9
+- Google Chrome Stable (for CLI-opened preview window)
 
 ### Setup
 ```bash
@@ -32,11 +34,14 @@ Status: Story 1.3 (Profile schema & commands) implemented.
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-# Install (editable)
+# Install Python dependencies (editable)
 pip install -U pip
 pip install -e .[dev]
 # If your Python < 3.11 or editable install fails, install minimal deps:
 # pip install typer python-dotenv PyYAML pytest
+
+# Install UI dependencies (from repo root)
+pnpm install
 ```
 
 ### Initialize and Inspect Config
@@ -44,11 +49,27 @@ pip install -e .[dev]
 python app.py --help
 python app.py config init          # creates config/config.yaml and runtime folders
 python app.py config show          # prints effective settings as JSON
-python app.py apply demo           # provisions a run dir, redacted actions.log, and history entry
+python app.py apply demo --dry-run --limit 1
+# provisions a run dir, launches the FastAPI preview service, and opens the local React UI
+# add --no-browser to keep Chrome from auto-launching
 ```
 
+### Run the Interactive Demo Preview
+```bash
+# Launch the full demo flow (opens Chrome app-mode pointing at the preview UI)
+python app.py apply demo --dry-run --limit 1
+
+# Skip auto-opening Chrome if you prefer to visit http://localhost:4950/ui manually
+python app.py apply demo --dry-run --limit 1 --no-browser
+
+# Restart an existing preview without provisioning a new run directory
+python app.py preview demo
+```
+
+Approving, aborting, or editing from the UI persists decisions to `runs/<id>/run.json`, appends entries to `actions.log`, and records redacted history events under `history/history.jsonl`. Guardrail log lines (e.g., `guardrail.demo.no_network`) confirm no Browser-Use automation or external SimplyHired calls occur during the demo.
+
 ### Sample Demo Artifacts
-Running `python app.py apply demo` creates a run folder similar to:
+Running `python app.py apply demo --dry-run --limit 1` creates a run folder similar to:
 
 ```json
 {
@@ -98,6 +119,7 @@ python app.py profiles list
 ### Tests
 ```bash
 pytest -q
+pnpm --filter @app/ui test -- --runInBand
 ```
 
 ## Project Structure

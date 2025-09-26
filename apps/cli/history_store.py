@@ -35,21 +35,31 @@ class HistoryWriter:
         self._append_jsonl(redacted)
         return self.history_path
 
-    def append_demo_entry(self, context: RunContext, summary: str) -> Path:
-        """Append a minimal demo history entry aligned with Story 1.4."""
+    def append_demo_entry(
+        self,
+        context: RunContext,
+        *,
+        summary: str,
+        decision: str,
+        edits: Optional[str] = None,
+        dry_run: bool = True,
+    ) -> Path:
+        """Append a demo-friendly history entry capturing preview outcomes."""
 
         payload: dict[str, object] = {
             "id": context.id,
             "timestamp": context.started_at.isoformat().replace("+00:00", "Z"),
             "profileId": context.profile_id or "",
-            # Demo sessions never submit, so we align with the schema's
-            # "skipped" status to satisfy downstream validators.
             "status": "skipped",
             "runPath": str(context.run_dir),
             "postingUrl": "demo://placeholder",
             "fingerprint": context.id,
             "summary": summary,
+            "decision": decision,
+            "dryRun": dry_run,
         }
+        if edits:
+            payload["notes"] = edits
         return self.append_entry(payload)
 
     def plan_retention(self) -> None:
