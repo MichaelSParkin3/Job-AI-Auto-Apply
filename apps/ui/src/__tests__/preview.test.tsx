@@ -29,8 +29,9 @@ describe("Preview App", () => {
     vi.resetAllMocks();
   });
 
-  it("renders preview data and handles approve action", async () => {
-    const fetchMock = vi.fn()
+  it("renders preview data, screenshot, and handles approve action", async () => {
+    const fetchMock = vi
+      .fn()
       .mockResolvedValueOnce(mockResponse(mockPreviewResponse))
       .mockResolvedValueOnce(mockResponse({ ok: true }));
 
@@ -42,11 +43,36 @@ describe("Preview App", () => {
     await waitFor(() =>
       expect(screen.getByText(/Preview Submission/)).toBeInTheDocument()
     );
+    expect(screen.getByText(/Dry Run Mode is active/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/Dry Run Mode is active/i)
+      screen.getByAltText(/Preview screenshot before submission/)
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Approve/i }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/run/demo123/approve", {
+        method: "POST",
+      })
+    );
+  });
+
+  it("fires approve with A shortcut", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse(mockPreviewResponse))
+      .mockResolvedValueOnce(mockResponse({ ok: true }));
+
+    // @ts-expect-error setting global fetch for jsdom
+    global.fetch = fetchMock as FetchMock;
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Keyboard shortcuts/)).toBeInTheDocument()
+    );
+
+    fireEvent.keyDown(window, { key: "a" });
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("/api/run/demo123/approve", {
