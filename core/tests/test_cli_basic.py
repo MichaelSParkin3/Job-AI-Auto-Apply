@@ -1,7 +1,8 @@
-from pathlib import Path
-import sys
-import os
 import json
+import os
+import sys
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 # Ensure repo root is on path for package imports
@@ -33,7 +34,11 @@ def test_config_init_creates_files_and_dirs(tmp_path: Path, monkeypatch):
     for d in [
         tmp_path / "config",
         tmp_path / "data" / "profiles",
+        tmp_path / "data" / "resumes",
         tmp_path / ".local",
+        tmp_path / ".local" / "browser",
+        tmp_path / ".local" / "browser" / "profiles",
+        tmp_path / ".local" / "state",
         tmp_path / "runs",
         tmp_path / "history",
     ]:
@@ -48,6 +53,8 @@ def test_env_loading_missing_and_present(tmp_path: Path, monkeypatch):
     from apps.cli.config_loader import Settings
 
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
     # Missing .env.local should not crash
     s = Settings.load()
     assert s.OPENROUTER_API_KEY is None
