@@ -14,6 +14,10 @@ app = typer.Typer(help="Job AI Auto Apply CLI")
 
 @app.callback()
 def init(_: bool = typer.Option(False, "--version", help="Show version")):
+    """Initialize the application state before running any command.
+    
+    Ensures that all required runtime directories exist.
+    """
     # Create runtime dirs early (AC #4)
     ensure_runtime_dirs()
 
@@ -40,7 +44,15 @@ def config_show():
 
 @apply_app.command("demo")
 def apply_demo(limit: int = typer.Option(1, help="Limit demo items"), dry_run: bool = True):
-    """Placeholder demo command for dry-run flow."""
+    """Run a placeholder demo of the application flow.
+
+    This command simulates a dry-run of the job application process
+    to demonstrate the flow without taking real action.
+
+    Args:
+        limit (int): The number of demo items to process.
+        dry_run (bool): If True, runs in simulation mode.
+    """
     _ = Settings.load(overrides={"dry_run": dry_run})
     typer.echo(f"Demo run initialized (limit={limit}, dry_run={dry_run})")
 
@@ -69,6 +81,7 @@ app.add_typer(history_app, name="history")
 
 
 def main():
+    """Primary entry point for the CLI application."""
     app()
 
 

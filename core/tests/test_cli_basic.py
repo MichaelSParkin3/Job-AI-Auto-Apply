@@ -13,6 +13,7 @@ runner = CliRunner()
 
 
 def test_help_lists_core_commands(tmp_path: Path, monkeypatch):
+    """Verify that the main --help output lists all core commands."""
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
@@ -23,6 +24,7 @@ def test_help_lists_core_commands(tmp_path: Path, monkeypatch):
 
 
 def test_config_init_creates_files_and_dirs(tmp_path: Path, monkeypatch):
+    """Verify that `config init` creates the necessary files and directories."""
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     # Run config init
     result = runner.invoke(app, ["config", "init"])
@@ -42,6 +44,7 @@ def test_config_init_creates_files_and_dirs(tmp_path: Path, monkeypatch):
 
 
 def test_env_loading_missing_and_present(tmp_path: Path, monkeypatch):
+    """Verify that settings load correctly with and without a .env.local file."""
     from apps.cli.config_loader import Settings
 
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
