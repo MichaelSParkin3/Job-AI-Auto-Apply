@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+"""Typer CLI entry points for Job AI Auto Apply operations."""
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -9,7 +11,12 @@ import json
 import typer
 
 from apps.preview.runner import run_preview_service
-from .config_loader import Settings, ensure_runtime_dirs, write_default_config
+from .config_loader import (
+    Settings,
+    ensure_runtime_dirs,
+    get_base_dir,
+    write_default_config,
+)
 from .history_store import HistoryWriter
 from .profiles import ProfileService
 from .run_store import RunStore
@@ -239,7 +246,8 @@ def profiles_current():
 @history_app.command("path")
 def history_path():
     """Show history folder path."""
-    typer.echo(str((Path.cwd() / "history").resolve()))
+    base = get_base_dir()
+    typer.echo(str((base / "history").resolve()))
 
 
 app.add_typer(apply_app, name="apply")
