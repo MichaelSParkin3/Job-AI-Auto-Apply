@@ -1,0 +1,20 @@
+# Monitoring and Observability
+
+## Monitoring Stack
+- Frontend Monitoring: Console warnings surfaced in UI dev; optional local log capture
+- Backend Monitoring: Structured JSON logs with log level; timing for key steps
+- Error Tracking: Local log files only; no cloud
+- Performance Monitoring: Simple timings for navigation, fill, submit, preview render
+
+## Key Metrics
+**Frontend**
+- Paint time of `/ui` route
+- Action latency: button press → API response
+- JS runtime errors count
+
+**Backend**
+- Request rate and latency per endpoint
+- Success/error ratio for submit actions
+- Average artifact write times
+
+---

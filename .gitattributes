@@ -1,0 +1,52 @@
+# ------------------------------------------------------------
+# Git attributes: auto text detection with targeted overrides
+# Option 2: Auto-detect + per-file EOL rules (Windows-friendly)
+# ------------------------------------------------------------
+
+# Auto-detect text files; normalize content in repo
+* text=auto
+
+# Unix shell scripts should use LF
+*.sh     text eol=lf
+*.bash   text eol=lf
+*.zsh    text eol=lf
+
+# Windows scripts should use CRLF
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+
+# Common binary types (avoid diffs/filters)
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.bz2  binary
+*.7z   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+
+# Reduce noisy diffs for build artifacts
+dist/**            -diff
+apps/ui/dist/**    -diff
+**/*.min.js        -diff
+**/*.map           -diff
+
+# GitHub Linguist hints
+**/node_modules/** linguist-vendored
+apps/ui/dist/**    linguist-generated
+
+# Exclude from `git archive`
+docs/drafts/**   export-ignore
+.local/**        export-ignore
+runs/**          export-ignore
+history/**       export-ignore
+data/resumes/**  export-ignore
+

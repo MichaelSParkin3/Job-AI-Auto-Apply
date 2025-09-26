@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "job-ai-auto-apply"
+version = "0.0.1"
+description = "Local-first CLI and preview server for job apply automation (demo)."
+requires-python = ">=3.11"
+dependencies = [
+  "typer[all]>=0.12.5",
+  "python-dotenv>=1.0.1",
+  "PyYAML>=6.0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["core/tests"]
+addopts = "-q"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["apps*"]
