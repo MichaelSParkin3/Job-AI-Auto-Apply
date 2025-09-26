@@ -1,0 +1,52 @@
+story: '1.5'
+story_title: 'Dry-Run Demo Flow'
+gate: FAIL
+status_reason: 'UI bundle cannot resolve @radix-ui/react-slot and guardrail tests do not assert the SimplyHired network ban, so release is blocked.'
+reviewer: 'Quinn (Test Architect)'
+updated: '2025-10-02T21:20:00Z'
+
+top_issues:
+  - id: AC1
+    title: 'Preview UI bundle fails to build'
+    severity: BLOCKER
+    detail: 'Vite/Vitest abort because @radix-ui/react-slot is imported but never declared in apps/ui/package.json, preventing the demo CLI from loading the React UI.'
+  - id: AC5
+    title: 'Guardrail coverage missing network assertion'
+    severity: MAJOR
+    detail: 'No automated test enforces the SimplyHired traffic prohibition; current coverage only checks for a log message.'
+
+waiver:
+  active: false
+
+quality_score: 55
+expires: '2025-10-09T21:20:00Z'
+
+evidence:
+  tests_reviewed: 3
+  risks_identified: 2
+  trace:
+    ac_covered: [2, 4]
+    ac_gaps: [1, 3, 5]
+    notes: 'Pytest verifies approve/edit persistence, but the UI bundle failure blocks AC1/3 and guardrail assertions for AC5 remain absent.'
+
+nfr_validation:
+  _assessed: [security, performance, reliability, maintainability]
+  security:
+    status: WARN
+    notes: 'Guardrail logging exists, yet without tests preventing outbound SimplyHired calls the dry-run promise is unenforced.'
+  performance:
+    status: PASS
+    notes: 'Filesystem-backed run mutations remain lightweight and synchronous.'
+  reliability:
+    status: WARN
+    notes: 'UI build failure prevents exercising the full preview loop, leaving integration stability unproven.'
+  maintainability:
+    status: WARN
+    notes: 'Missing dependency declarations in apps/ui/package.json will surprise future installs; add the Radix Slot package explicitly.'
+
+recommendations:
+  immediate:
+    - 'Add @radix-ui/react-slot to apps/ui/package.json (and lockfile) so Vite/Vitest can resolve the component imports.'
+    - 'Augment guardrail tests to assert no HTTP traffic targets *.simplyhired.com during demo runs (e.g., via httpx mocking).'
+  future:
+    - 'Backfill UI accessibility regression (axe) once the bundle builds to satisfy story testing expectations.'
