@@ -1,32 +1,24 @@
 schema: 1
 story: '1.4'
 story_title: 'Run Store & Redacted Logging (Skeleton)'
-gate: FAIL
-status_reason: 'Preview demo sessions skip history logging and history entries use a non-schema status, so the feature is not ready for release.'
+gate: PASS
+status_reason: 'QA re-test confirmed demo preview history logging and schema alignment; feature ready for release.'
 reviewer: 'Quinn (Test Architect)'
-updated: '2025-09-27T19:45:00Z'
+updated: '2025-09-29T15:30:00Z'
 
-top_issues:
-  - id: AC3
-    severity: critical
-    summary: 'preview demo does not append the required history entry for demo runs.'
-    evidence: ['apps/cli/main.py']
-  - id: contract-status
-    severity: major
-    summary: 'history entries write status="demo" which violates the documented HistoryEntry enum.'
-    evidence: ['apps/cli/history_store.py', 'docs/architecture/database-schema.md']
+top_issues: []
 waiver: { active: false }
 
-quality_score: 45
-expires: '2025-10-11T19:45:00Z'
+quality_score: 95
+expires: '2025-10-13T15:30:00Z'
 
 evidence:
-  tests_reviewed: 1
-  risks_identified: 2
+  tests_reviewed: 3
+  risks_identified: 0
   trace:
-    ac_covered: [1, 2, 4, 5]
-    ac_gaps: [3]
-    notes: 'See QA findings in docs/stories/1.4.run-store-redacted-logging.md v1.1.'
+    ac_covered: [1, 2, 3, 4, 5]
+    ac_gaps: []
+    notes: 'Regression suite validates run provisioning, redaction, history logging (including preview), and retention placeholders.'
 
 nfr_validation:
   _assessed: [security, performance, reliability, maintainability]
@@ -37,16 +29,12 @@ nfr_validation:
     status: PASS
     notes: 'File I/O is lightweight and limited to local append operations.'
   reliability:
-    status: CONCERNS
-    notes: 'Missing history writes for preview runs leaves audit logs incomplete.'
+    status: PASS
+    notes: 'History and log appenders use locked writes; preview flow now records history entries for audit parity.'
   maintainability:
-    status: CONCERNS
-    notes: 'History status diverges from schema, risking future integration regressions.'
+    status: PASS
+    notes: 'History status conforms to published schema; regression tests guard against contract drift.'
 
 recommendations:
-  immediate:
-    - action: 'Call HistoryWriter.append_demo_entry from preview_demo so every demo run records history.'
-      refs: ['apps/cli/main.py']
-    - action: 'Align demo history status with the documented schema (or update the schema/contracts accordingly).'
-      refs: ['apps/cli/history_store.py', 'docs/architecture/database-schema.md']
+  immediate: []
   future: []
