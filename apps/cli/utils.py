@@ -1,32 +1,44 @@
+"""Shared CLI utilities such as structured logging and API error helpers."""
+
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict
+
+import portalocker
+
+from .redaction import redact_event
+from .runtime_state import get_run_context
 
 
 def log_event(event: Dict[str, Any]) -> None:
-    """Log a structured JSON event to stdout.
+    """Log a structured JSON event to stdout and the active run's actions.log."""
 
-    Args:
-        event (dict): A dictionary-like object to be serialized as JSON.
-    """
-    print(json.dumps(event, ensure_ascii=False))
+    record: Dict[str, Any] = dict(event)
+    record.setdefault("level", "info")
+    record.setdefault(
+        "timestamp", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    )
+    context = get_run_context()
+    if context:
+        record.setdefault("runId", context.id)
+    redacted = redact_event(record)
+    line = json.dumps(redacted, ensure_ascii=False, sort_keys=True)
+    print(line)
+    if context:
+        _append_actions_log(context.logs_path, line)
 
 
 @dataclass
 class ApiError:
-    """Represents a structured error message, aligned with REST API errors.
+    """Represents a structured error message, aligned with REST API errors."""
 
-    Attributes:
-        code (str): A stable, machine-readable error code.
-        message (str): A human-readable description of the error.
-        details (dict | None): Optional structured data about the error.
-        timestamp (str): An ISO-8601 timestamp of when the error occurred.
-        requestId (str): A unique ID for tracing the request.
-    """
     code: str
     message: str
     details: Dict[str, Any] | None = None
@@ -34,10 +46,17 @@ class ApiError:
     requestId: str = uuid.uuid4().hex
 
     def to_json(self) -> str:
-        """Serialize the error object to a JSON string, nested under an 'error' key.
+        """Serialize the error object to a JSON string, nested under an 'error' key."""
 
-        Returns:
-            str: A JSON representation of the error.
-        """
         return json.dumps({"error": asdict(self)}, ensure_ascii=False)
+
+
+def _append_actions_log(path: Path, line: str) -> None:
+    """Append a JSONL line to the actions.log file with crash-safe semantics."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with portalocker.Lock(path, "a", flags=portalocker.LockFlags.EXCLUSIVE) as handle:
+        handle.write(line + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 

@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+"""Typer CLI entry points for Job AI Auto Apply operations."""
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -9,9 +11,17 @@ import json
 import typer
 
 from apps.preview.runner import run_preview_service
-from .config_loader import Settings, ensure_runtime_dirs, write_default_config
+from .config_loader import (
+    Settings,
+    ensure_runtime_dirs,
+    get_base_dir,
+    write_default_config,
+)
+from .history_store import HistoryWriter
 from .profiles import ProfileService
-from .utils import ApiError
+from .run_store import RunStore
+from .runtime_state import get_run_context
+from .utils import ApiError, log_event
 
 
 app = typer.Typer(help="Job AI Auto Apply CLI")
@@ -59,8 +69,35 @@ def apply_demo(limit: int = typer.Option(1, help="Limit demo items"), dry_run: b
         limit (int): The number of demo items to process.
         dry_run (bool): If True, runs in simulation mode.
     """
-    _ = Settings.load(overrides={"dry_run": dry_run})
-    typer.echo(f"Demo run initialized (limit={limit}, dry_run={dry_run})")
+    settings = Settings.load(overrides={"dry_run": dry_run})
+    store = RunStore()
+    record = store.start_demo_run(profile_id=settings.active_profile)
+    log_event(
+        {
+            "event": "run.demo_initialized",
+            "message": "Demo run directory prepared with redacted logging.",
+            "limit": limit,
+            "dryRun": dry_run,
+        }
+    )
+    context = get_run_context()
+    if context:
+        HistoryWriter().append_demo_entry(
+            context,
+            summary="Demo run initialized; actions.log will contain redacted events.",
+        )
+    typer.echo(
+        json.dumps(
+            {
+                "run_id": record.id,
+                "run_dir": str(record.run_dir),
+                "actions_log": str(record.logs_path),
+                "limit": limit,
+                "dry_run": dry_run,
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 @preview_app.command("demo")
@@ -84,6 +121,21 @@ def preview_demo(
     if port is not None:
         overrides["preview_port"] = port
     settings = Settings.load(overrides=overrides)
+    run_store = RunStore()
+    run_store.start_demo_run(profile_id=settings.active_profile)
+    log_event(
+        {
+            "event": "preview.demo_initialized",
+            "message": "Preview server demo session initialized.",
+            "port": settings.preview_port,
+        }
+    )
+    context = get_run_context()
+    if context:
+        HistoryWriter().append_demo_entry(
+            context,
+            summary="Preview demo session initialized; UI interactions will be redacted.",
+        )
     typer.echo(
         f"Starting preview server on http://localhost:{settings.preview_port}/ui (demo mode, dry-run)."
     )
@@ -194,7 +246,8 @@ def profiles_current():
 @history_app.command("path")
 def history_path():
     """Show history folder path."""
-    typer.echo(str((Path.cwd() / "history").resolve()))
+    base = get_base_dir()
+    typer.echo(str((base / "history").resolve()))
 
 
 app.add_typer(apply_app, name="apply")
