@@ -88,3 +88,5 @@ logs/
 .ai/*
 !.ai/.gitkeep
 
+# Custom scripts
+setup.sh
