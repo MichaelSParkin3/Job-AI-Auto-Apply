@@ -15,7 +15,7 @@ from apps.cli.config_loader import Settings, get_base_dir
 from apps.cli.history_store import HistoryWriter
 from apps.cli.run_store import RunRecord, RunStore
 from apps.cli.runtime_state import RunContext, set_run_context
-from apps.preview import create_app
+from apps.preview.main import create_app
 
 if TYPE_CHECKING:
     from uvicorn import Config, Server
