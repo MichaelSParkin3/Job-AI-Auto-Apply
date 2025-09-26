@@ -21,6 +21,9 @@ DEFAULTS = {
 }
 
 
+ACTIVE_PROFILE_FILENAME = "active-profile.json"
+
+
 def get_base_dir() -> Path:
     """Return project root, searching upwards from this file for pyproject.toml."""
     if env_override := os.environ.get("JAA_BASE_DIR"):
@@ -51,13 +54,45 @@ def ensure_runtime_dirs(base: Path | None = None) -> Dict[str, str]:
     required = [
         base / "config",
         base / "data" / "profiles",
+        base / "data" / "resumes",
         base / ".local",
+        base / ".local" / "browser",
+        base / ".local" / "browser" / "profiles",
+        base / ".local" / "state",
         base / "runs",
         base / "history",
     ]
     for d in required:
         d.mkdir(parents=True, exist_ok=True)
     return {"created": "ok", "base": str(base)}
+
+
+def active_profile_marker_path(base: Path | None = None) -> Path:
+    """Return the location of the active profile marker file."""
+
+    base = base or get_base_dir()
+    return base / ".local" / "state" / ACTIVE_PROFILE_FILENAME
+
+
+def load_active_profile(base: Path | None = None) -> str | None:
+    """Return the active profile id from the persisted marker if present."""
+
+    marker = active_profile_marker_path(base)
+    if not marker.exists():
+        return None
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        log_event(
+            {
+                "level": "error",
+                "message": f"Failed to parse {marker}; ignoring active profile marker.",
+                "event": "profiles.marker_corrupt",
+                "error": str(exc),
+            }
+        )
+        return None
+    return data.get("active_profile")
 
 
 def load_env(base: Path | None = None) -> Dict[str, Any]:
@@ -203,6 +238,8 @@ class Settings:
         # env
         env = load_env(base)
         data.update({k: v for k, v in env.items() if v is not None})
+        if marker_profile := load_active_profile(base):
+            data["active_profile"] = marker_profile
         # CLI overrides last
         if overrides:
             data.update({k: v for k, v in overrides.items() if v is not None})
