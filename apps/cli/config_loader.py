@@ -14,6 +14,8 @@ from .utils import log_event
 DEFAULTS = {
     "log_level": "INFO",
     "artifacts_keep_days": 30,
+    "history_keep_days": 60,
+    "actions_log_max_mb": 25,
     "active_profile": None,
     "dry_run": False,
     "preview_port": 4950,
@@ -173,7 +175,7 @@ def write_default_config(base: Path | None = None) -> Path:
         header = (
             "# Job-AI-Auto-Apply configuration\n"
             "# Precedence: CLI > profile YAML > global defaults\n"
-            "# Edit values as needed.\n"
+            "# Retention fields (artifacts/history/actions log) are placeholders until cleanup is implemented.\n"
         )
         text = header + yaml.safe_dump(DEFAULTS, sort_keys=True)
         cfg_path.write_text(text, encoding="utf-8")
@@ -190,6 +192,8 @@ class Settings:
 
     log_level: str = DEFAULTS["log_level"]
     artifacts_keep_days: int = DEFAULTS["artifacts_keep_days"]
+    history_keep_days: int = DEFAULTS["history_keep_days"]
+    actions_log_max_mb: int = DEFAULTS["actions_log_max_mb"]
     active_profile: str | None = DEFAULTS["active_profile"]
     dry_run: bool = DEFAULTS["dry_run"]
     preview_port: int = DEFAULTS["preview_port"]

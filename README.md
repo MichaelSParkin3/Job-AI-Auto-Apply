@@ -15,7 +15,10 @@ Status: Story 1.3 (Profile schema & commands) implemented.
 - Idempotent `config init` + runtime folders (`config/`, `data/profiles/`, `data/resumes/`, `.local/browser/profiles/`, `.local/state/`, `runs/`, `history/`)
 - Profile management commands (`profiles new|validate|list|use|current`) with Pydantic schema enforcement
 - Optional `.env.local` for OpenRouter; missing file is a warning, not an error
-- JSON event logging primitives and `ApiError` shape placeholder
+- Filesystem run store provisioning per-demo folders with seeded `run.json`
+- Redacted JSON event logging pipeline writing to stdout and `actions.log`
+- Append-only `history/history.jsonl` entries for demo runs
+- Retention placeholders in `config.yaml` for artifacts, history, and actions log size caps
 
 ## Quickstart
 ### Prerequisites
@@ -41,6 +44,29 @@ pip install -e .[dev]
 python app.py --help
 python app.py config init          # creates config/config.yaml and runtime folders
 python app.py config show          # prints effective settings as JSON
+python app.py apply demo           # provisions a run dir, redacted actions.log, and history entry
+```
+
+### Sample Demo Artifacts
+Running `python app.py apply demo` creates a run folder similar to:
+
+```json
+{
+  "run_id": "20240926-120000-abcdef12",
+  "actions_log": "runs/20240926-120000-abcdef12/actions.log"
+}
+```
+
+`actions.log` entries are newline-delimited JSON with automatic PII masking:
+
+```json
+{"event":"run.demo_initialized","level":"info","message":"Demo run directory prepared with redacted logging.","runId":"20240926-120000-abcdef12","timestamp":"2024-09-26T12:00:00Z"}
+```
+
+`history/history.jsonl` receives a matching redacted record:
+
+```json
+{"fingerprint":"20240926-120000-abcdef12","id":"20240926-120000-abcdef12","postingUrl":"demo://placeholder","profileId":"","runPath":"runs/20240926-120000-abcdef12","status":"demo","summary":"Demo run initialized; actions.log will contain redacted events.","timestamp":"2024-09-26T12:00:00Z"}
 ```
 
 ### Environment Variables
