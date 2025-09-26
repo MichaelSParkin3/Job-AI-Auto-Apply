@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, os.getcwd())
 
 from apps.cli.history_store import HistoryWriter
+from apps.cli.main import preview_demo
 from apps.cli.run_store import RunStore
 from apps.cli.runtime_state import get_run_context, set_run_context
 from apps.cli.utils import log_event
@@ -65,6 +66,24 @@ def test_history_writer_appends_redacted_summary(
     history_lines = writer.history_path.read_text(encoding="utf-8").splitlines()
     assert history_lines, "history.jsonl should accumulate entries"
     entry = json.loads(history_lines[-1])
-    assert entry["status"] == "demo"
+    assert entry["status"] == "skipped"
     assert entry["runPath"].endswith(context.id)
     assert entry["summary"].endswith("{{REDACTED:PHONE}} to confirm.")
+
+
+def test_preview_demo_records_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """preview demo should append a history entry for QA traceability."""
+
+    monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "apps.cli.main.run_preview_service", lambda *args, **kwargs: None
+    )
+
+    preview_demo(no_browser=True, port=None)
+
+    history_file = tmp_path / "history" / "history.jsonl"
+    assert history_file.exists(), "preview demo should create history.jsonl"
+    entry = json.loads(history_file.read_text(encoding="utf-8").splitlines()[-1])
+    assert entry["status"] == "skipped"
+    assert entry["runPath"].startswith(str((tmp_path / "runs").resolve()))
+    assert "Preview demo session" in entry["summary"]

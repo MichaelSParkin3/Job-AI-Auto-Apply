@@ -42,7 +42,9 @@ class HistoryWriter:
             "id": context.id,
             "timestamp": context.started_at.isoformat().replace("+00:00", "Z"),
             "profileId": context.profile_id or "",
-            "status": "demo",
+            # Demo sessions never submit, so we align with the schema's
+            # "skipped" status to satisfy downstream validators.
+            "status": "skipped",
             "runPath": str(context.run_dir),
             "postingUrl": "demo://placeholder",
             "fingerprint": context.id,

@@ -123,6 +123,12 @@ def preview_demo(
             "port": settings.preview_port,
         }
     )
+    context = get_run_context()
+    if context:
+        HistoryWriter().append_demo_entry(
+            context,
+            summary="Preview demo session initialized; UI interactions will be redacted.",
+        )
     typer.echo(
         f"Starting preview server on http://localhost:{settings.preview_port}/ui (demo mode, dry-run)."
     )
