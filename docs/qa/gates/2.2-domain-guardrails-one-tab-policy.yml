@@ -1,0 +1,40 @@
+story: '2.2'
+story_title: 'Domain Guardrails & One-Tab Policy'
+gate: PASS
+status_reason: 'QA retest confirms guardrail telemetry now holds tabCount at one while tracking blocked attempts separately; all acceptance criteria satisfied.'
+reviewer: 'Quinn (Test Architect)'
+updated: '2025-10-09T00:00:00Z'
+
+top_issues: []
+
+waiver:
+  active: false
+
+quality_score: 95
+expires: '2025-10-22T00:00:00Z'
+
+evidence:
+  tests_reviewed: 2
+  risks_identified: 0
+  trace:
+    ac_covered: [1, 2, 3, 4, 5]
+    ac_gaps: []
+    notes: 'Validated domain enforcement, single-tab suppression, pacing waits, and telemetry payloads via full pytest suite.'
+
+nfr_validation:
+  _assessed: [security, reliability, maintainability]
+  security:
+    status: PASS
+    notes: 'Accurate guardrail telemetry preserves audit evidence for on-domain navigation enforcement.'
+  reliability:
+    status: PASS
+    notes: 'tabCount remains stable at one and blocked attempts are tracked separately, keeping downstream consumers in sync.'
+  maintainability:
+    status: PASS
+    notes: 'Regression coverage ensures telemetry stays aligned with the single-tab policy.'
+
+recommendations:
+  immediate:
+    - 'No immediate remediation required; continue monitoring guardrail telemetry in CI.'
+  future:
+    - 'Consider expanding observability dashboards to visualise blocked attempts versus active sessions for trend tracking.'
