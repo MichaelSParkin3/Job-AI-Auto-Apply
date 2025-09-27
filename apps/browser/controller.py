@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol
 
 from apps.cli.utils import log_event
+from .guardrails import NavigationGuardrails
 
 
 class BrowserUseError(RuntimeError):
@@ -40,6 +41,8 @@ class BrowserLaunchConfig:
     chrome_path: Optional[str] = None
     keep_alive: bool = True
     guardrail_domains: tuple[str, ...] = ("*.simplyhired.com",)
+    wait_jitter_ms: tuple[int, int] = (100, 600)
+    think_time_range_s: tuple[float, float] = (1.0, 2.0)
 
 
 @dataclass
@@ -97,11 +100,18 @@ class BrowserUseController:
         config: BrowserLaunchConfig,
         *,
         client_factory: ClientFactory | None = None,
+        guardrails: NavigationGuardrails | None = None,
     ) -> None:
         self.config = config
         self._client_factory = client_factory or create_browser_client
         self._client: BrowserClient | None = None
         self.session_id = uuid.uuid4().hex
+        self._guardrails = guardrails or NavigationGuardrails(
+            allowed_domains=config.guardrail_domains,
+            wait_jitter_ms=config.wait_jitter_ms,
+            think_time_range_s=config.think_time_range_s,
+            event_logger=log_event,
+        )
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -128,17 +138,45 @@ class BrowserUseController:
             },
             "locale": self.config.locale,
             "timezone": self.config.timezone,
-            "guardrails": list(self.config.guardrail_domains),
+            "guardrails": {
+                "allowedDomains": list(self.config.guardrail_domains),
+            },
+            "pacing": {
+                "waitJitterMs": list(self.config.wait_jitter_ms),
+                "thinkTimeRangeS": list(self.config.think_time_range_s),
+            },
         }
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def open_url(self, url: str) -> BrowserActionResult:
+    def open_url(self, url: str, *, allow_new_tab: bool = False) -> BrowserActionResult:
         """Open the provided URL and return telemetry for downstream orchestration."""
 
         client = self._ensure_client()
         payload = self._base_payload() | {"url": url}
+        if allow_new_tab:
+            decision = self._guardrails.block_new_tab(payload, reason="open_url")
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": "new_tab_blocked",
+                    "message": "New tab attempts are blocked by guardrails.",
+                },
+                telemetry=decision.telemetry,
+            )
+
+        decision = self._guardrails.before_navigation(url, payload)
+        if not decision.allowed:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": decision.reason or "blocked_domain",
+                    "message": "Navigation blocked by domain guardrails.",
+                    "url": url,
+                },
+                telemetry=decision.telemetry,
+            )
         try:
             result = client.open_url(url)
         except Exception as exc:  # pragma: no cover - error branch covered separately
@@ -171,7 +209,7 @@ class BrowserUseController:
         return BrowserActionResult(
             status=BrowserActionStatus.OK,
             details={"response": result},
-            telemetry=telemetry,
+            telemetry=telemetry | {"guardrailEvent": decision.event},
         )
 
     def wait_for_idle(self, timeout: float = 5.0) -> BrowserActionResult:
@@ -203,11 +241,19 @@ class BrowserUseController:
             telemetry=telemetry,
         )
 
-    def safe_click(self, selector: str, timeout: float | None = None) -> BrowserActionResult:
+    def safe_click(
+        self,
+        selector: str,
+        timeout: float | None = None,
+        *,
+        think_time: bool = False,
+    ) -> BrowserActionResult:
         """Perform a guarded click using Browser-Use primitives."""
 
         client = self._ensure_client()
         payload = self._base_payload() | {"selector": selector, "timeout": timeout}
+        if think_time:
+            self._guardrails.think_time(payload, reason="pre_click")
         try:
             result = client.safe_click(selector, timeout)
         except Exception as exc:  # pragma: no cover - defensive

@@ -61,6 +61,40 @@ class DocumentsConfig(BaseModel):
         return value
 
 
+class BrowserPacingOverrides(BaseModel):
+    """Optional pacing overrides for guardrailed automation."""
+
+    wait_jitter_ms: List[int] | None = Field(
+        default=None, alias="wait_jitter_ms", description="[min,max] jitter in ms"
+    )
+    think_time_range_s: List[float] | None = Field(
+        default=None,
+        alias="think_time_range_s",
+        description="[min,max] think time in seconds",
+    )
+
+    @model_validator(mode="after")
+    def validate_ranges(self) -> "BrowserPacingOverrides":
+        if self.wait_jitter_ms is not None:
+            if len(self.wait_jitter_ms) != 2:
+                raise ValueError("browser.pacing.wait_jitter_ms must contain exactly two values")
+            if self.wait_jitter_ms[0] < 0 or self.wait_jitter_ms[1] < self.wait_jitter_ms[0]:
+                raise ValueError("browser.pacing.wait_jitter_ms must be an increasing range")
+        if self.think_time_range_s is not None:
+            if len(self.think_time_range_s) != 2:
+                raise ValueError(
+                    "browser.pacing.think_time_range_s must contain exactly two values"
+                )
+            if (
+                self.think_time_range_s[0] < 0
+                or self.think_time_range_s[1] < self.think_time_range_s[0]
+            ):
+                raise ValueError(
+                    "browser.pacing.think_time_range_s must be an increasing range"
+                )
+        return self
+
+
 class BrowserOverridesConfig(BaseModel):
     """Optional Browser-Use overrides stored on the profile."""
 
@@ -73,6 +107,16 @@ class BrowserOverridesConfig(BaseModel):
     )
     chrome_path: str | None = Field(
         default=None, description="Override Chrome executable for this profile"
+    )
+    allowed_domains: List[str] | None = Field(
+        default=None,
+        alias="allowed_domains",
+        description="Domain allowlist overrides",
+    )
+    pacing: BrowserPacingOverrides | None = Field(
+        default=None,
+        alias="pacing",
+        description="Guardrail pacing overrides",
     )
 
     @model_validator(mode="after")
@@ -177,6 +221,18 @@ class ProfileConfig(BaseModel):
                 overrides["viewport"] = viewport
         if self.browser.chrome_path:
             overrides["chrome_path"] = self.browser.chrome_path
+        if self.browser.allowed_domains:
+            domains = [value.strip() for value in self.browser.allowed_domains if value.strip()]
+            if domains:
+                overrides["allowed_domains"] = domains
+        if self.browser.pacing:
+            pacing: Dict[str, Any] = {}
+            if self.browser.pacing.wait_jitter_ms:
+                pacing["wait_jitter_ms"] = list(self.browser.pacing.wait_jitter_ms)
+            if self.browser.pacing.think_time_range_s:
+                pacing["think_time_range_s"] = list(self.browser.pacing.think_time_range_s)
+            if pacing:
+                overrides["pacing"] = pacing
         return overrides
 
 

@@ -74,3 +74,5 @@
   - [Checklist Results Report](./checklist-results-report.md)
   - [Next Steps](./next-steps.md)
     - [Architect Prompt](./next-steps.md#architect-prompt)
+
+> **Update (Story 2.2):** Browser automation now enforces a configurable domain allowlist, one-tab policy, and pacing defaults surfaced through `browser.allowed_domains` and `browser.pacing.*` settings. See the README “Stealth Guardrails & Pacing” section for the live contract.
