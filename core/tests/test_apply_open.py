@@ -50,6 +50,9 @@ browser:
     width: 1440
     height: 900
   chrome_path: C:/Program Files/Google/Chrome/Application/chrome.exe
+  allowed_domains:
+    - "*.simplyhired.com"
+    - example.com
 """,
         encoding="utf-8",
     )
@@ -102,6 +105,9 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     assert payload["model"] == "profile-model"
     assert Path(payload["userDataDir"]).exists()
     assert captured_config["client"].open_calls == ["https://example.com/search?q=python"]
+    assert payload["guardrails"]["allowedDomains"] == ["*.simplyhired.com", "example.com"]
+    assert payload["guardrails"]["pacing"]["waitJitterMs"] == [100, 600]
+    assert payload["telemetry"]["guardrailEvent"]["event"] == "guardrail.browser.NAVIGATE"
 
     config = captured_config["config"]
     assert str(config.user_data_dir).endswith("frontend-dev")

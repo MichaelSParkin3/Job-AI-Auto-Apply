@@ -25,6 +25,9 @@ DEFAULTS = {
     "browser_timezone": "America/Los_Angeles",
     "browser_viewport_width": 1366,
     "browser_viewport_height": 768,
+    "browser_allowed_domains": ["*.simplyhired.com"],
+    "browser_pacing_wait_jitter_ms": [100, 600],
+    "browser_pacing_think_time_range_s": [1.0, 2.0],
 }
 
 
@@ -208,6 +211,13 @@ class Settings:
     browser_timezone: str = DEFAULTS["browser_timezone"]
     browser_viewport_width: int = DEFAULTS["browser_viewport_width"]
     browser_viewport_height: int = DEFAULTS["browser_viewport_height"]
+    browser_allowed_domains: tuple[str, ...] = tuple(DEFAULTS["browser_allowed_domains"])
+    browser_pacing_wait_jitter_ms: tuple[int, int] = tuple(
+        DEFAULTS["browser_pacing_wait_jitter_ms"]
+    )
+    browser_pacing_think_time_range_s: tuple[float, float] = tuple(
+        DEFAULTS["browser_pacing_think_time_range_s"]
+    )
     # Derived/env
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
@@ -273,6 +283,22 @@ class Settings:
                     data["browser_viewport_height"] = height
             if browser_dict.get("chrome_path"):
                 data["chrome_path"] = browser_dict["chrome_path"]
+            allowed = browser_dict.get("allowed_domains")
+            if isinstance(allowed, (list, tuple, set)):
+                domains = [str(item).strip() for item in allowed if str(item).strip()]
+                if domains:
+                    data["browser_allowed_domains"] = domains
+            pacing = browser_dict.get("pacing")
+            if isinstance(pacing, dict):
+                wait = pacing.get("wait_jitter_ms")
+                if isinstance(wait, (list, tuple)) and len(wait) == 2:
+                    data["browser_pacing_wait_jitter_ms"] = [int(wait[0]), int(wait[1])]
+                think = pacing.get("think_time_range_s")
+                if isinstance(think, (list, tuple)) and len(think) == 2:
+                    data["browser_pacing_think_time_range_s"] = [
+                        float(think[0]),
+                        float(think[1]),
+                    ]
         # CLI overrides last
         if overrides:
             processed: Dict[str, Any] = {}
@@ -293,9 +319,42 @@ class Settings:
                         processed["browser_viewport_height"] = int(value)
                     elif subkey == "chrome_path":
                         processed["chrome_path"] = value
+                    elif subkey == "allowed_domains":
+                        if isinstance(value, str):
+                            domains = [item.strip() for item in value.split(",") if item.strip()]
+                        else:
+                            domains = list(value) if isinstance(value, (list, tuple, set)) else []
+                        if domains:
+                            processed["browser_allowed_domains"] = domains
+                    elif subkey == "pacing.wait_jitter_ms":
+                        if isinstance(value, str):
+                            parts = [float(part) for part in value.split(",") if part.strip()]
+                        else:
+                            parts = list(value) if isinstance(value, (list, tuple)) else []
+                        if len(parts) == 2:
+                            processed["browser_pacing_wait_jitter_ms"] = [int(parts[0]), int(parts[1])]
+                    elif subkey == "pacing.think_time_range_s":
+                        if isinstance(value, str):
+                            parts = [float(part) for part in value.split(",") if part.strip()]
+                        else:
+                            parts = list(value) if isinstance(value, (list, tuple)) else []
+                        if len(parts) == 2:
+                            processed["browser_pacing_think_time_range_s"] = [
+                                float(parts[0]),
+                                float(parts[1]),
+                            ]
                 else:
                     processed[key] = value
             data.update(processed)
+        if "browser_allowed_domains" in data:
+            domains = data["browser_allowed_domains"]
+            data["browser_allowed_domains"] = tuple(str(item).strip() for item in domains if str(item).strip())
+        if "browser_pacing_wait_jitter_ms" in data:
+            wait = data["browser_pacing_wait_jitter_ms"]
+            data["browser_pacing_wait_jitter_ms"] = (int(wait[0]), int(wait[1]))
+        if "browser_pacing_think_time_range_s" in data:
+            think = data["browser_pacing_think_time_range_s"]
+            data["browser_pacing_think_time_range_s"] = (float(think[0]), float(think[1]))
         return cls(**data)
 
     def to_json(self) -> str:
