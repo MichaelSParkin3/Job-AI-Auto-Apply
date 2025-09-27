@@ -1,6 +1,13 @@
 """Browser automation wrapper package for Job AI Auto Apply."""
 
-from .controller import BrowserUseController, BrowserLaunchConfig, BrowserActionResult, BrowserActionStatus, BrowserUseError
+from .controller import (
+    BrowserUseController,
+    BrowserLaunchConfig,
+    BrowserActionResult,
+    BrowserActionStatus,
+    BrowserUseError,
+)
+from .guardrails import NavigationGuardrails
 
 __all__ = [
     "BrowserUseController",
@@ -8,4 +15,5 @@ __all__ = [
     "BrowserActionResult",
     "BrowserActionStatus",
     "BrowserUseError",
+    "NavigationGuardrails",
 ]

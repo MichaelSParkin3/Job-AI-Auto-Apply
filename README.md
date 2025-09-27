@@ -131,6 +131,12 @@ python app.py apply open "https://www.simplyhired.com/search?q=python" \
 
 The command resolves the Chrome `user_data_dir` to `.local/browser/profiles/<profile>`, honors overrides from `config/config.yaml` or `data/profiles/<id>.yaml`, and returns a JSON payload with the session identifier so follow-up automation can reuse the same browser instance.
 
+#### Stealth Guardrails & Pacing
+- **Domain allowlist** – navigation is limited to the configured domains (`browser.allowed_domains`). Profile YAML can append additional domains per-identity.
+- **Single-tab enforcement** – attempts to spawn a new tab/window are blocked and logged as `guardrail.browser.NEW_TAB_ATTEMPT` events.
+- **Human pacing defaults** – each action injects jittered waits (100–600 ms) and optional think-time ranges (1–2 s) before critical interactions. Tweak via `browser.pacing.wait_jitter_ms` and `browser.pacing.think_time_range_s` in `config/config.yaml`, CLI overrides (`--browser.allowed_domains`, `--browser.pacing.*`), or profile overrides.
+- **Structured telemetry** – navigation, tab suppression, pacing waits, and think-time pauses stream through the `log_event` pipeline so `actions.log` and downstream tooling can observe guardrail posture.
+
 ### Tests
 ```bash
 pytest -q

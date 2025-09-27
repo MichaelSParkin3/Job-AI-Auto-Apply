@@ -230,6 +230,11 @@ def apply_open(
     viewport_width = viewport_override.get("width") if isinstance(viewport_override, dict) else None
     viewport_height = viewport_override.get("height") if isinstance(viewport_override, dict) else None
 
+    allowed_domains_override = (
+        browser_overrides.get("allowed_domains") if browser_overrides else None
+    )
+    pacing_override = browser_overrides.get("pacing") if browser_overrides else None
+
     locale = effective_locale or settings.browser_locale
     timezone = effective_timezone or settings.browser_timezone
     width = viewport_width or settings.browser_viewport_width
@@ -238,6 +243,26 @@ def apply_open(
         chrome_path
         or (browser_overrides.get("chrome_path") if browser_overrides else None)
         or settings.chrome_path
+    )
+    if isinstance(allowed_domains_override, (list, tuple, set)):
+        allowed_domains = tuple(str(value).strip() for value in allowed_domains_override if str(value).strip())
+    elif isinstance(allowed_domains_override, str):
+        allowed_domains = tuple(part.strip() for part in allowed_domains_override.split(",") if part.strip())
+    else:
+        allowed_domains = settings.browser_allowed_domains
+    wait_jitter_ms = (
+        tuple(pacing_override.get("wait_jitter_ms"))
+        if isinstance(pacing_override, dict)
+        and pacing_override.get("wait_jitter_ms")
+        and len(pacing_override["wait_jitter_ms"]) == 2
+        else settings.browser_pacing_wait_jitter_ms
+    )
+    think_time_range_s = (
+        tuple(pacing_override.get("think_time_range_s"))
+        if isinstance(pacing_override, dict)
+        and pacing_override.get("think_time_range_s")
+        and len(pacing_override["think_time_range_s"]) == 2
+        else settings.browser_pacing_think_time_range_s
     )
 
     log_event(
@@ -250,6 +275,11 @@ def apply_open(
             "timezone": timezone,
             "model": effective_model,
             "keepAlive": True,
+            "guardrails": {"allowedDomains": list(allowed_domains)},
+            "pacing": {
+                "waitJitterMs": list(wait_jitter_ms),
+                "thinkTimeRangeS": list(think_time_range_s),
+            },
         }
     )
     if dry_run:
@@ -257,7 +287,7 @@ def apply_open(
             {
                 "event": "guardrail.dry_run.no_network",
                 "message": "Dry-run mode prevents SimplyHired navigation side-effects.",
-                "domains": ["*.simplyhired.com"],
+                "domains": list(allowed_domains),
                 "profileId": profile_id,
             }
         )
@@ -272,6 +302,9 @@ def apply_open(
         timezone=str(timezone),
         chrome_path=str(chrome) if chrome else None,
         keep_alive=True,
+        guardrail_domains=tuple(allowed_domains),
+        wait_jitter_ms=tuple(int(value) for value in wait_jitter_ms),
+        think_time_range_s=tuple(float(value) for value in think_time_range_s),
     )
 
     log_event(
@@ -282,6 +315,10 @@ def apply_open(
             "sessionDir": str(user_data_dir),
             "guardrails": list(launch_config.guardrail_domains),
             "keepAlive": True,
+            "pacing": {
+                "waitJitterMs": list(launch_config.wait_jitter_ms),
+                "thinkTimeRangeS": list(launch_config.think_time_range_s),
+            },
         }
     )
 
@@ -313,6 +350,13 @@ def apply_open(
         "dryRun": dry_run,
         "details": result.details,
         "telemetry": result.telemetry,
+        "guardrails": {
+            "allowedDomains": list(allowed_domains),
+            "pacing": {
+                "waitJitterMs": list(wait_jitter_ms),
+                "thinkTimeRangeS": list(think_time_range_s),
+            },
+        },
     }
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
