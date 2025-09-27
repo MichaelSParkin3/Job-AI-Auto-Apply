@@ -46,7 +46,7 @@ class RunRecord:
     run_json_path: Path
     logs_path: Path
     profile_id: Optional[str]
-    screenshot_path: Path
+    screenshot_path: Path | None
 
     def to_json_payload(self) -> dict[str, object]:
         """Return the JSON-serializable payload for the initial run stub."""
@@ -73,7 +73,7 @@ class RunRecord:
                 "decision": "pending",
                 "summary": PLACEHOLDER_SUMMARY,
                 "notes": PLACEHOLDER_NOTES,
-                "screenshotPath": str(self.screenshot_path),
+                "screenshotPath": str(self.screenshot_path) if self.screenshot_path else "",
             },
             "submission": {},
             "artifactsDir": str(self.run_dir),
@@ -125,6 +125,73 @@ class RunStore:
             metadata["profileBinding"] = profile_binding
         record.run_json_path.write_text(
             json.dumps(run_json, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        set_run_context(
+            RunContext(
+                id=record.id,
+                started_at=record.started_at,
+                run_dir=record.run_dir,
+                run_json_path=record.run_json_path,
+                logs_path=record.logs_path,
+                profile_id=record.profile_id,
+                profile_binding=profile_binding,
+            )
+        )
+        return record
+
+    def start_search_readiness_run(
+        self,
+        *,
+        profile_id: Optional[str],
+        search_url: str,
+        dry_run: bool,
+        profile_binding: Optional[Dict[str, Any]] = None,
+    ) -> RunRecord:
+        """Provision a run directory for search readiness checks."""
+
+        timestamp = datetime.now(timezone.utc)
+        slug = secrets.token_hex(4)
+        run_id = f"{timestamp:%Y%m%d-%H%M%S}-{slug}"
+        run_dir = self.runs_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        logs_path = run_dir / "actions.log"
+        logs_path.touch(exist_ok=True)
+        record = RunRecord(
+            id=run_id,
+            started_at=timestamp,
+            run_dir=run_dir,
+            run_json_path=run_dir / "run.json",
+            logs_path=logs_path,
+            profile_id=profile_id,
+            screenshot_path=None,
+        )
+        metadata: Dict[str, Any] = {
+            "mode": "cli",
+            "profileLabel": format_profile_label(profile_id),
+        }
+        if profile_binding is not None:
+            metadata["profileBinding"] = profile_binding
+        run_payload = {
+            "id": record.id,
+            "startedAt": record.started_at.isoformat().replace("+00:00", "Z"),
+            "status": "search_ready_pending",
+            "profileId": profile_id,
+            "automation": {
+                "command": "apply.open",
+                "searchUrl": search_url,
+                "dryRun": dry_run,
+            },
+            "preview": {
+                "dryRun": dry_run,
+                "decision": "pending",
+            },
+            "readiness": {"status": "pending"},
+            "artifactsDir": str(run_dir),
+            "logsPath": str(logs_path),
+            "metadata": metadata,
+        }
+        record.run_json_path.write_text(
+            json.dumps(run_payload, indent=2, ensure_ascii=False), encoding="utf-8"
         )
         set_run_context(
             RunContext(
@@ -200,6 +267,23 @@ class RunStore:
         preview["decidedAt"] = _now_iso()
         preview["approved"] = decision == "approved"
         data["status"] = "approved" if decision == "approved" else "aborted"
+        self._write_run_json(record.run_json_path, data)
+        return data
+
+    def record_search_readiness(
+        self, record: RunRecord, readiness_payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Persist readiness results for the given run."""
+
+        data = self._load_run_json(record.run_json_path)
+        data["readiness"] = readiness_payload
+        status = readiness_payload.get("status")
+        if status == "ready":
+            data["status"] = "search_ready"
+        elif status == "unready":
+            data["status"] = "search_unready"
+        else:
+            data["status"] = "search_ready_pending"
         self._write_run_json(record.run_json_path, data)
         return data
 

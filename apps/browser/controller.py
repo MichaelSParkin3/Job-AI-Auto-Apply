@@ -68,6 +68,9 @@ class BrowserClient(Protocol):
     def safe_click(self, selector: str, timeout: float | None = None) -> Any:  # pragma: no cover
         """Click a selector while keeping guardrails enforced."""
 
+    def get_page_content(self) -> str:  # pragma: no cover - runtime protocol
+        """Return the current page HTML content."""
+
 
 ClientFactory = Callable[[BrowserLaunchConfig], BrowserClient]
 
@@ -246,6 +249,53 @@ class BrowserUseController:
             details={"response": result},
             telemetry=telemetry,
         )
+
+    def get_page_html(self) -> BrowserActionResult:
+        """Capture the current page HTML for diagnostics."""
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {"event": "browser.page_content"}
+        try:
+            html = self._extract_page_html(client)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "error",
+                    "event": "browser.page_content.failed",
+                    "sessionId": self.session_id,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"html": html},
+            telemetry=payload,
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _extract_page_html(client: BrowserClient) -> str:
+        """Return HTML using the most common Browser-Use client shims."""
+
+        if hasattr(client, "get_page_content") and callable(client.get_page_content):
+            return client.get_page_content()
+        if hasattr(client, "page_content"):
+            page_content = getattr(client, "page_content")
+            if callable(page_content):
+                return page_content()
+        page = getattr(client, "page", None)
+        if page is not None and hasattr(page, "content"):
+            content_fn = getattr(page, "content")
+            if callable(content_fn):
+                return content_fn()
+        raise BrowserUseError("Browser client does not expose a page content API")
 
     def safe_click(
         self,

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SimplyHired Search Loading</title>
+  </head>
+  <body>
+    <main id="search-root">
+      <section class="SearchResults">
+        <div class="LoadingSpinner" data-testid="spinner">Loading…</div>
+        <ul class="SerpJob-list">
+          <!-- Not enough job cards yet -->
+          <li class="SerpJob-card">
+            <a class="SerpJob-link" href="/job/1">Backend Engineer</a>
+          </li>
+          <li class="SerpJob-card">
+            <a class="SerpJob-link" href="/job/2">Frontend Engineer</a>
+          </li>
+          <li class="SerpJob-card">
+            <a class="SerpJob-link" href="/job/3">DevOps Engineer</a>
+          </li>
+        </ul>
+      </section>
+      <aside class="JobDetailPane muted">
+        <article class="JobDetail" data-testid="job-detail-pane" aria-hidden="true">
+          <header>
+            <h2 class="JobDetail-title">Loading…</h2>
+          </header>
+        </article>
+      </aside>
+    </main>
+  </body>
+</html>
