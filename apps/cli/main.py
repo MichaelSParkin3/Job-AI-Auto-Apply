@@ -24,7 +24,7 @@ from .config_loader import (
     write_default_config,
 )
 from .history_store import HistoryWriter
-from .profiles import ProfileService
+from .profiles import ProfileBinding, ProfileService
 from .run_store import RunStore
 from .runtime_state import get_run_context
 from .utils import ApiError, log_event
@@ -87,8 +87,18 @@ def apply_demo(
     if port is not None:
         overrides["preview_port"] = port
     settings = Settings.load(overrides=overrides)
-    store = RunStore()
-    record = store.start_demo_run(profile_id=settings.active_profile)
+    base = get_base_dir()
+    service = ProfileService(base=base)
+    binding_payload = None
+    if settings.active_profile:
+        binding = service.build_binding(settings.active_profile)
+        if binding:
+            binding_payload = binding.cli_payload()
+    store = RunStore(base=base)
+    record = store.start_demo_run(
+        profile_id=settings.active_profile,
+        profile_binding=binding_payload,
+    )
     store.bootstrap_demo_preview(record, limit=limit, profile_id=settings.active_profile)
     log_event(
         {
@@ -182,35 +192,36 @@ def apply_open(
             raise typer.Exit(code=1)
 
     service = ProfileService(base=base)
-    profile_config = None
-    try:
-        profile_config = service.load_profile(profile_id)
-    except FileNotFoundError:
+    if (
+        profile_id == "demo"
+        and dry_run
+        and not service.profile_path(profile_id).exists()
+    ):
+        binding = ProfileBinding.demo(base, profile_id=profile_id)
         log_event(
             {
                 "level": "warning",
-                "event": "profiles.not_found", 
-                "profile_id": profile_id,
-                "message": "Profile not found; continuing with defaults.",
+                "event": "profiles.demo_fallback",
+                "message": "Using demo profile binding because no active profile is configured.",
+                "profile": binding.telemetry_payload(),
             }
         )
-    except ValueError as exc:
-        typer.secho(f"Failed to load profile '{profile_id}': {exc}", fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-
-    browser_overrides: dict[str, Any] = {}
-    if profile_config:
-        browser_overrides = profile_config.resolved_browser_overrides()
-        user_data_dir = profile_config.resolved_user_data_dir(base)
     else:
-        user_data_dir = (base / ".local" / "browser" / "profiles" / profile_id).resolve()
+        try:
+            binding = service.bind_profile(profile_id)
+        except ApiError as error:
+            typer.secho(error.to_json(), fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+    browser_overrides: dict[str, Any] = dict(binding.browser_overrides)
+    user_data_dir = binding.user_data_dir
 
     user_data_dir.mkdir(parents=True, exist_ok=True)
 
     viewport_override = browser_overrides.get("viewport", {}) if browser_overrides else {}
     profile_model = browser_overrides.get("model") if browser_overrides else None
-    if not profile_model and profile_config:
-        profile_model = profile_config.model_overrides.get("llm")  # type: ignore[arg-type]
+    if not profile_model:
+        profile_model = binding.model_overrides.get("llm")
 
     effective_model = (
         model
@@ -269,6 +280,7 @@ def apply_open(
         {
             "event": "browser.session.prepared",
             "profileId": profile_id,
+            "profile": binding.telemetry_payload(),
             "userDataDir": str(user_data_dir),
             "viewport": {"width": width, "height": height},
             "locale": locale,
@@ -289,6 +301,7 @@ def apply_open(
                 "message": "Dry-run mode prevents SimplyHired navigation side-effects.",
                 "domains": list(allowed_domains),
                 "profileId": profile_id,
+                "profile": binding.telemetry_payload(),
             }
         )
 
@@ -305,6 +318,8 @@ def apply_open(
         guardrail_domains=tuple(allowed_domains),
         wait_jitter_ms=tuple(int(value) for value in wait_jitter_ms),
         think_time_range_s=tuple(float(value) for value in think_time_range_s),
+        profile_metadata=binding.telemetry_payload(),
+        profile_binding=binding.cli_payload(),
     )
 
     log_event(
@@ -312,6 +327,7 @@ def apply_open(
             "event": "guardrail.browser.stealth",
             "message": "Launching Browser-Use with stealth guardrails.",
             "profileId": profile_id,
+            "profile": binding.telemetry_payload(),
             "sessionDir": str(user_data_dir),
             "guardrails": list(launch_config.guardrail_domains),
             "keepAlive": True,
@@ -357,6 +373,7 @@ def apply_open(
                 "thinkTimeRangeS": list(think_time_range_s),
             },
         },
+        "profile": binding.cli_payload(),
     }
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -382,8 +399,18 @@ def preview_demo(
     if port is not None:
         overrides["preview_port"] = port
     settings = Settings.load(overrides=overrides)
-    run_store = RunStore()
-    record = run_store.start_demo_run(profile_id=settings.active_profile)
+    base = get_base_dir()
+    service = ProfileService(base=base)
+    binding_payload = None
+    if settings.active_profile:
+        binding = service.build_binding(settings.active_profile)
+        if binding:
+            binding_payload = binding.cli_payload()
+    run_store = RunStore(base=base)
+    record = run_store.start_demo_run(
+        profile_id=settings.active_profile,
+        profile_binding=binding_payload,
+    )
     run_store.bootstrap_demo_preview(record, limit=1, profile_id=settings.active_profile)
     log_event(
         {
@@ -452,26 +479,14 @@ def profiles_validate(profile_id: str = typer.Argument(..., help="Profile identi
     """Validate a profile YAML against the schema and resume requirements."""
 
     service = ProfileService()
-    result = service.validate_profile(profile_id)
-    if result.is_valid and result.profile:
-        typer.secho(f"Profile '{profile_id}' is valid.", fg=typer.colors.GREEN)
-        output = {
-            "id": profile_id,
-            "display_name": result.profile.display_name,
-            "resume_path": str(result.resume_path) if result.resume_path else None,
-            "user_data_dir": str(result.profile.resolved_user_data_dir(service.base)),
-            "browser": result.profile.resolved_browser_overrides(),
-        }
-        typer.echo(json.dumps(output, ensure_ascii=False, indent=2))
-        return
+    try:
+        binding = service.bind_profile(profile_id)
+    except ApiError as error:
+        typer.secho(error.to_json(), fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
-    error = ApiError(
-        code="profiles.validation_failed",
-        message=f"Profile '{profile_id}' failed validation.",
-        details={"errors": result.errors},
-    )
-    typer.secho(error.to_json(), fg=typer.colors.RED)
-    raise typer.Exit(code=1)
+    typer.secho(f"Profile '{profile_id}' is valid.", fg=typer.colors.GREEN)
+    typer.echo(json.dumps(binding.cli_payload(), ensure_ascii=False, indent=2))
 
 
 @profiles_app.command("list")
@@ -488,27 +503,21 @@ def profiles_use(profile_id: str = typer.Argument(..., help="Profile identifier 
     """Set the active profile for subsequent CLI runs."""
 
     service = ProfileService()
-    result = service.validate_profile(profile_id)
-    if not result.profile:
-        error = ApiError(
-            code="profiles.not_found",
-            message=f"Profile '{profile_id}' does not exist.",
-            details={"errors": result.errors},
-        )
-        typer.secho(error.to_json(), fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    if not result.is_valid:
-        error = ApiError(
-            code="profiles.invalid",
-            message=f"Profile '{profile_id}' must pass validation before use.",
-            details={"errors": result.errors},
-        )
+    try:
+        binding = service.bind_profile(profile_id)
+    except ApiError as error:
         typer.secho(error.to_json(), fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
     marker = service.set_active_profile(profile_id)
     typer.secho(f"Active profile set to '{profile_id}'.", fg=typer.colors.GREEN)
-    typer.echo(json.dumps({"marker": str(marker)}, ensure_ascii=False, indent=2))
+    typer.echo(
+        json.dumps(
+            {"marker": str(marker), "profile": binding.cli_payload()},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 @profiles_app.command("current")

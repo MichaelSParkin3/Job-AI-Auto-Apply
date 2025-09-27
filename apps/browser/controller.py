@@ -43,6 +43,8 @@ class BrowserLaunchConfig:
     guardrail_domains: tuple[str, ...] = ("*.simplyhired.com",)
     wait_jitter_ms: tuple[int, int] = (100, 600)
     think_time_range_s: tuple[float, float] = (1.0, 2.0)
+    profile_metadata: Optional[Dict[str, Any]] = None
+    profile_binding: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -106,6 +108,7 @@ class BrowserUseController:
         self._client_factory = client_factory or create_browser_client
         self._client: BrowserClient | None = None
         self.session_id = uuid.uuid4().hex
+        self.profile_binding = config.profile_binding
         self._guardrails = guardrails or NavigationGuardrails(
             allowed_domains=config.guardrail_domains,
             wait_jitter_ms=config.wait_jitter_ms,
@@ -127,7 +130,7 @@ class BrowserUseController:
         return self._client
 
     def _base_payload(self) -> Dict[str, Any]:
-        return {
+        payload: Dict[str, Any] = {
             "sessionId": self.session_id,
             "profileId": self.config.profile_id,
             "userDataDir": str(self.config.user_data_dir),
@@ -146,6 +149,9 @@ class BrowserUseController:
                 "thinkTimeRangeS": list(self.config.think_time_range_s),
             },
         }
+        if self.config.profile_metadata:
+            payload["profile"] = dict(self.config.profile_metadata)
+        return payload
 
     # ------------------------------------------------------------------
     # Public API

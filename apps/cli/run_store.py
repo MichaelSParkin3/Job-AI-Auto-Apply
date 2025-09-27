@@ -93,7 +93,12 @@ class RunStore:
         ensure_runtime_dirs(self.base)
         self.runs_dir = self.base / "runs"
 
-    def start_demo_run(self, profile_id: Optional[str] = None) -> RunRecord:
+    def start_demo_run(
+        self,
+        profile_id: Optional[str] = None,
+        *,
+        profile_binding: Optional[Dict[str, Any]] = None,
+    ) -> RunRecord:
         """Provision a run directory for demo flows and seed run.json."""
 
         timestamp = datetime.now(timezone.utc)
@@ -115,6 +120,9 @@ class RunStore:
             screenshot_path=screenshot_path,
         )
         run_json = record.to_json_payload()
+        if profile_binding is not None:
+            metadata = run_json.setdefault("metadata", {})
+            metadata["profileBinding"] = profile_binding
         record.run_json_path.write_text(
             json.dumps(run_json, indent=2, ensure_ascii=False), encoding="utf-8"
         )
@@ -126,6 +134,7 @@ class RunStore:
                 run_json_path=record.run_json_path,
                 logs_path=record.logs_path,
                 profile_id=record.profile_id,
+                profile_binding=profile_binding,
             )
         )
         return record

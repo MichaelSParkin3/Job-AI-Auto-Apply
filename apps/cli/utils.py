@@ -36,7 +36,7 @@ def log_event(event: Dict[str, Any]) -> None:
 
 
 @dataclass
-class ApiError:
+class ApiError(Exception):
     """Represents a structured error message, aligned with REST API errors."""
 
     code: str
