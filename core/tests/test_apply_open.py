@@ -11,6 +11,12 @@ from apps.cli.main import app
 
 runner = CliRunner()
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SELECTOR_SOURCE = (
+    PROJECT_ROOT / "sites" / "simplyhired" / "selectors" / "search-readiness.json"
+)
+FIXTURES_DIR = PROJECT_ROOT / "core" / "tests" / "fixtures" / "simplyhired" / "search"
+
 
 def _parse_last_json(output: str) -> dict:
     lines = [line for line in output.splitlines() if line.strip()]
@@ -22,6 +28,18 @@ def _parse_last_json(output: str) -> dict:
             except json.JSONDecodeError:
                 continue
     raise ValueError(f"No JSON payload found in output: {output!r}")
+
+
+def _prepare_search_selectors(base: Path) -> Path:
+    target = base / "sites" / "simplyhired" / "selectors"
+    target.mkdir(parents=True, exist_ok=True)
+    destination = target / "search-readiness.json"
+    destination.write_text(SELECTOR_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+    return destination
+
+
+def _load_fixture(name: str) -> str:
+    return (FIXTURES_DIR / name).read_text(encoding="utf-8")
 
 
 def _bootstrap_profile(
@@ -78,15 +96,34 @@ browser:
 
 
 class RecordingClient:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        snapshots: list[str] | None = None,
+        idle_failures: set[int] | None = None,
+    ) -> None:
         self.open_calls: list[str] = []
+        self._snapshots = snapshots or [""]
+        self._snapshot_index = 0
+        self._idle_failures = set(idle_failures or set())
+        self.wait_for_idle_calls = 0
 
     def open_url(self, url: str) -> dict[str, str]:
         self.open_calls.append(url)
         return {"opened": url}
 
     def wait_for_idle(self, timeout: float = 5.0) -> dict[str, float]:
+        self.wait_for_idle_calls += 1
+        if self.wait_for_idle_calls in self._idle_failures:
+            raise RuntimeError("idle failed")
         return {"timeout": timeout}
+
+    def get_page_content(self) -> str:
+        index = min(self._snapshot_index, len(self._snapshots) - 1)
+        html = self._snapshots[index]
+        if self._snapshot_index < len(self._snapshots) - 1:
+            self._snapshot_index += 1
+        return html
 
     def safe_click(self, selector: str, timeout: float | None = None) -> dict[str, str | float | None]:
         return {"selector": selector, "timeout": timeout}
@@ -94,17 +131,21 @@ class RecordingClient:
 
 def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    _prepare_search_selectors(tmp_path)
     _bootstrap_profile(tmp_path)
 
     captured_config: dict[str, object] = {}
 
+    baseline_html = _load_fixture("baseline.html")
+
     def factory(config):
-        client = RecordingClient()
+        client = RecordingClient(snapshots=[baseline_html])
         captured_config["config"] = config
         captured_config["client"] = client
         return client
 
     monkeypatch.setattr("apps.browser.controller.create_browser_client", factory)
+    monkeypatch.setattr("apps.cli.main.time.sleep", lambda *_args, **_kwargs: None)
 
     result_use = runner.invoke(app, ["profiles", "use", "frontend-dev"], color=False)
     assert result_use.exit_code == 0
@@ -135,6 +176,16 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     assert payload["telemetry"]["profile"]["resume"]["exists"] is True
     assert payload["telemetry"]["profile"]["qaOverrideKeys"] == []
 
+    readiness = payload["readiness"]
+    assert readiness["status"] == "ready"
+    assert readiness["attempts"][0]["ok"] is True
+    assert Path(readiness["artifacts"]["html"][-1]).exists()
+    assert payload["telemetry"]["searchReadiness"]["status"] == "ready"
+
+    run_dir = Path(payload["run"]["artifactsDir"])
+    run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert run_json["status"] == "search_ready"
+
     config = captured_config["config"]
     assert str(config.user_data_dir).endswith("frontend-dev")
     assert config.viewport_width == 1440
@@ -161,6 +212,7 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     assert result_override.exit_code == 0, result_override.stdout
     payload_override = _parse_last_json(result_override.stdout)
     assert payload_override["model"] == "cli-model"
+    assert payload_override["readiness"]["status"] == "ready"
 
 
 def test_apply_open_blocks_when_resume_missing(tmp_path: Path, monkeypatch):
@@ -194,8 +246,42 @@ def test_apply_open_blocks_when_resume_missing(tmp_path: Path, monkeypatch):
     )
 
 
+def test_apply_open_readiness_failure_records_artifacts(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    _prepare_search_selectors(tmp_path)
+    _bootstrap_profile(tmp_path, profile_id="frontend-dev")
+
+    spinner_html = _load_fixture("spinner.html")
+
+    def factory(config):
+        return RecordingClient(snapshots=[spinner_html, spinner_html])
+
+    monkeypatch.setattr("apps.browser.controller.create_browser_client", factory)
+    monkeypatch.setattr("apps.cli.main.time.sleep", lambda *_args, **_kwargs: None)
+
+    result_use = runner.invoke(app, ["profiles", "use", "frontend-dev"], color=False)
+    assert result_use.exit_code == 0
+
+    result = runner.invoke(app, ["apply", "open", "https://example.com/search?q=python"], color=False)
+    assert result.exit_code == 1, result.stdout
+    payload = _parse_last_json(result.stdout)
+    readiness = payload["readiness"]
+    assert readiness["status"] == "unready"
+    assert len(readiness["attempts"]) == 2
+    assert readiness["attempts"][-1]["ok"] is False
+    assert readiness["reason"] in {"insufficient_cards", "missing_detail"}
+    for artifact in readiness["artifacts"]["html"]:
+        assert Path(artifact).exists()
+
+    run_dir = Path(payload["run"]["artifactsDir"])
+    run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert run_json["status"] == "search_unready"
+    assert run_json["readiness"]["status"] == "unready"
+
+
 def test_apply_open_switch_profiles_isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    _prepare_search_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
     _bootstrap_profile(
         tmp_path,
@@ -208,13 +294,15 @@ def test_apply_open_switch_profiles_isolated(tmp_path: Path, monkeypatch):
     )
 
     launches: list[tuple[object, RecordingClient]] = []
+    baseline_html = _load_fixture("baseline.html")
 
     def factory(config):
-        client = RecordingClient()
+        client = RecordingClient(snapshots=[baseline_html])
         launches.append((config, client))
         return client
 
     monkeypatch.setattr("apps.browser.controller.create_browser_client", factory)
+    monkeypatch.setattr("apps.cli.main.time.sleep", lambda *_args, **_kwargs: None)
 
     result_use_first = runner.invoke(app, ["profiles", "use", "frontend-dev"], color=False)
     assert result_use_first.exit_code == 0
@@ -232,6 +320,7 @@ def test_apply_open_switch_profiles_isolated(tmp_path: Path, monkeypatch):
         "*.simplyhired.com",
         "example.com",
     ]
+    assert payload_first["readiness"]["status"] == "ready"
 
     result_use_second = runner.invoke(app, ["profiles", "use", "data-analyst"], color=False)
     assert result_use_second.exit_code == 0, result_use_second.stdout
@@ -254,6 +343,7 @@ def test_apply_open_switch_profiles_isolated(tmp_path: Path, monkeypatch):
         "data.example.com",
     ]
     assert payload_second["telemetry"]["profile"]["model"] == "analyst-model"
+    assert payload_second["readiness"]["status"] == "ready"
     assert first_dir != second_dir
 
     assert len(launches) == 2

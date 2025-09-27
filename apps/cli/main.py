@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import json
+import time
 
 import typer
 
@@ -17,6 +18,7 @@ from apps.browser import (
     BrowserUseError,
 )
 from apps.preview.runner import run_preview_service
+from sites.simplyhired.search_readiness import SearchReadinessDetector
 from .config_loader import (
     Settings,
     ensure_runtime_dirs,
@@ -26,7 +28,7 @@ from .config_loader import (
 from .history_store import HistoryWriter
 from .profiles import ProfileBinding, ProfileService
 from .run_store import RunStore
-from .runtime_state import get_run_context
+from .runtime_state import get_run_context, set_run_context
 from .utils import ApiError, log_event
 
 
@@ -246,6 +248,39 @@ def apply_open(
     )
     pacing_override = browser_overrides.get("pacing") if browser_overrides else None
 
+    readiness_retry_attempts = max(0, int(settings.search_ready_retry_attempts))
+    readiness_backoff_seconds = max(0.0, float(settings.search_ready_backoff_seconds))
+    readiness_min_cards = max(1, int(settings.search_ready_min_cards))
+    selector_override = settings.search_ready_selector_override
+    search_ready_override = None
+    if browser_overrides:
+        search_ready_override = (
+            browser_overrides.get("search_ready")
+            or browser_overrides.get("search_readiness")
+        )
+    if isinstance(search_ready_override, dict):
+        if "retry_attempts" in search_ready_override:
+            try:
+                readiness_retry_attempts = max(0, int(search_ready_override["retry_attempts"]))
+            except (TypeError, ValueError):
+                pass
+        if "backoff_seconds" in search_ready_override:
+            try:
+                readiness_backoff_seconds = max(
+                    0.0, float(search_ready_override["backoff_seconds"])
+                )
+            except (TypeError, ValueError):
+                pass
+        if "min_cards" in search_ready_override:
+            try:
+                readiness_min_cards = max(1, int(search_ready_override["min_cards"]))
+            except (TypeError, ValueError):
+                pass
+        if search_ready_override.get("selector_file"):
+            selector_override = str(search_ready_override["selector_file"])
+        elif search_ready_override.get("selector_override"):
+            selector_override = str(search_ready_override["selector_override"])
+
     locale = effective_locale or settings.browser_locale
     timezone = effective_timezone or settings.browser_timezone
     width = viewport_width or settings.browser_viewport_width
@@ -353,7 +388,7 @@ def apply_open(
         typer.echo(json.dumps(result.details, ensure_ascii=False, indent=2))
         raise typer.Exit(code=1)
 
-    payload = {
+    payload: dict[str, Any] = {
         "status": result.status.value,
         "sessionId": controller.session_id,
         "profileId": profile_id,
@@ -375,7 +410,244 @@ def apply_open(
         },
         "profile": binding.cli_payload(),
     }
-    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    store = RunStore(base=base)
+    selectors_base = (
+        base / "sites" / "simplyhired" / "selectors" / "search-readiness.json"
+    )
+    override_paths: list[Path] = []
+    if selector_override:
+        override_path = Path(selector_override)
+        if not override_path.is_absolute():
+            override_path = (base / selector_override).resolve()
+        if override_path.exists():
+            override_paths.append(override_path)
+        else:
+            log_event(
+                {
+                    "level": "warning",
+                    "event": "search.readiness.selector_missing",
+                    "message": "Configured selector override not found; using base selectors.",
+                    "path": str(override_path),
+                }
+            )
+    if not selectors_base.exists():
+        typer.secho(
+            f"Selector map not found at {selectors_base}.", fg=typer.colors.RED
+        )
+        raise typer.Exit(code=1)
+
+    readiness_record = None
+    try:
+        readiness_record = store.start_search_readiness_run(
+            profile_id=profile_id,
+            search_url=search_url,
+            dry_run=dry_run,
+            profile_binding=binding.telemetry_payload(),
+        )
+        readiness_dir = readiness_record.run_dir / "search-ready"
+        readiness_dir.mkdir(parents=True, exist_ok=True)
+
+        detector = SearchReadinessDetector.load(
+            selectors_base, overrides=override_paths
+        )
+        if readiness_min_cards != detector.config.min_cards:
+            detector.config.min_cards = readiness_min_cards
+
+        attempts_payload: list[dict[str, Any]] = []
+        artifacts_html: list[str] = []
+        success_result = None
+        last_result = None
+        failure_reason: str | None = None
+        start_time = time.monotonic()
+        total_attempts = 1 + readiness_retry_attempts
+
+        for attempt in range(1, total_attempts + 1):
+            idle_result = controller.wait_for_idle(timeout=5.0)
+            if idle_result.status is BrowserActionStatus.ERROR:
+                error_message = idle_result.details.get("error")
+                failure_reason = "wait_for_idle_failed"
+                attempts_payload.append(
+                    {
+                        "attempt": attempt,
+                        "ok": False,
+                        "error": error_message,
+                        "artifact": None,
+                    }
+                )
+                log_event(
+                    {
+                        "level": "error",
+                        "event": "search.readiness.wait_failed",
+                        "runId": readiness_record.id,
+                        "attempt": attempt,
+                        "error": error_message,
+                    }
+                )
+                break
+
+            html_result = controller.get_page_html()
+            if html_result.status is BrowserActionStatus.ERROR:
+                error_message = html_result.details.get("error")
+                failure_reason = "capture_failed"
+                attempts_payload.append(
+                    {
+                        "attempt": attempt,
+                        "ok": False,
+                        "error": error_message,
+                        "artifact": None,
+                    }
+                )
+                log_event(
+                    {
+                        "level": "error",
+                        "event": "search.readiness.capture_failed",
+                        "runId": readiness_record.id,
+                        "attempt": attempt,
+                        "error": error_message,
+                    }
+                )
+                break
+
+            html = html_result.details.get("html", "")
+            html_path = readiness_dir / f"attempt-{attempt}.html"
+            html_path.write_text(html, encoding="utf-8")
+            result_eval = detector.evaluate(html)
+            last_result = result_eval
+            attempt_payload = {
+                "attempt": attempt,
+                "ok": result_eval.ok,
+                "jobCards": result_eval.job_card_count,
+                "detailFound": result_eval.detail_found,
+                "variant": result_eval.variant_id,
+                "jobCardSelector": result_eval.job_card_selector,
+                "detailSelector": result_eval.detail_selector,
+                "artifact": str(html_path),
+                "reason": result_eval.diagnostics.get("reason"),
+            }
+            attempts_payload.append(attempt_payload)
+            artifacts_html.append(str(html_path))
+            log_event(
+                {
+                    "event": "search.readiness.attempt",
+                    "runId": readiness_record.id,
+                    "attempt": attempt,
+                    "jobCards": result_eval.job_card_count,
+                    "detailFound": result_eval.detail_found,
+                    "variant": result_eval.variant_id,
+                }
+            )
+            if result_eval.ok:
+                success_result = result_eval
+                break
+            failure_reason = attempt_payload["reason"] or "incomplete"
+            if attempt < total_attempts:
+                log_event(
+                    {
+                        "event": "search.readiness.retry",
+                        "runId": readiness_record.id,
+                        "attempt": attempt,
+                        "reason": failure_reason,
+                        "waitSeconds": readiness_backoff_seconds,
+                        "remaining": total_attempts - attempt,
+                    }
+                )
+                if readiness_backoff_seconds > 0:
+                    time.sleep(readiness_backoff_seconds)
+
+        duration = round(time.monotonic() - start_time, 3)
+        selectors_info = {
+            "base": str(selectors_base),
+            "overrides": [str(path) for path in override_paths],
+        }
+        if success_result:
+            readiness_payload = {
+                "status": "ready",
+                "runId": readiness_record.id,
+                "variant": success_result.variant_id,
+                "jobCardCount": success_result.job_card_count,
+                "detailFound": success_result.detail_found,
+            }
+            log_event(
+                {
+                    "event": "SEARCH_READY",
+                    "runId": readiness_record.id,
+                    "variant": success_result.variant_id,
+                    "jobCards": success_result.job_card_count,
+                    "detailFound": True,
+                    "attempts": len(attempts_payload),
+                    "durationSeconds": duration,
+                    "artifactHtml": attempts_payload[-1]["artifact"],
+                }
+            )
+        else:
+            job_cards = last_result.job_card_count if last_result else 0
+            detail_found = last_result.detail_found if last_result else False
+            variant_id = last_result.variant_id if last_result else None
+            reason = failure_reason or (
+                last_result.diagnostics.get("reason") if last_result else "unknown"
+            )
+            readiness_payload = {
+                "status": "unready",
+                "runId": readiness_record.id,
+                "variant": variant_id,
+                "jobCardCount": job_cards,
+                "detailFound": detail_found,
+                "reason": reason,
+            }
+            log_event(
+                {
+                    "level": "error",
+                    "event": "SEARCH_UNREADY",
+                    "runId": readiness_record.id,
+                    "variant": variant_id,
+                    "jobCards": job_cards,
+                    "detailFound": detail_found,
+                    "reason": reason,
+                    "attempts": len(attempts_payload),
+                    "durationSeconds": duration,
+                    "artifactHtml": attempts_payload[-1]["artifact"]
+                    if attempts_payload
+                    else None,
+                }
+            )
+
+        readiness_payload.update(
+            {
+                "selectors": selectors_info,
+                "retry": {
+                    "maxRetries": readiness_retry_attempts,
+                    "backoffSeconds": readiness_backoff_seconds,
+                },
+                "attempts": attempts_payload,
+                "artifacts": {"html": artifacts_html},
+                "durationSeconds": duration,
+                "minCardCount": detector.config.min_cards,
+            }
+        )
+        store.record_search_readiness(readiness_record, readiness_payload)
+
+        payload["run"] = {
+            "id": readiness_record.id,
+            "artifactsDir": str(readiness_record.run_dir),
+        }
+        payload["readiness"] = readiness_payload
+        payload["telemetry"]["searchReadiness"] = {
+            "status": readiness_payload["status"],
+            "attempts": len(attempts_payload),
+            "durationSeconds": duration,
+            "variant": readiness_payload.get("variant"),
+        }
+
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        if readiness_payload["status"] != "ready":
+            raise typer.Exit(code=1)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    finally:
+        if readiness_record:
+            set_run_context(None)
 
 
 @preview_app.command("demo")

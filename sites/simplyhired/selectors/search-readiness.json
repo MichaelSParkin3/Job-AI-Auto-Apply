@@ -1,0 +1,37 @@
+{
+  "minCardCount": 10,
+  "variants": [
+    {
+      "id": "serp-default",
+      "description": "Standard SimplyHired list/detail split layout",
+      "jobCardSelectors": [
+        "ul.SerpJob-list li.SerpJob-card",
+        "[data-testid=serp-job-card]"
+      ],
+      "detailSelectors": [
+        "aside.JobDetailPane article.JobDetail[data-testid=job-detail-pane]",
+        "[data-testid=job-detail-pane]:not([aria-hidden=true])"
+      ],
+      "titleSelectors": [
+        "aside.JobDetailPane .JobDetail-title",
+        "[data-testid=job-detail-pane] h2"
+      ]
+    },
+    {
+      "id": "compact-iframe",
+      "description": "Compact variant with div-based list and iframe detail pane",
+      "jobCardSelectors": [
+        "div.JobsList .JobCardCompact",
+        "[data-testid=compact-card-link]"
+      ],
+      "detailSelectors": [
+        "section.DetailPane[data-active=true]",
+        "#detail-frame"
+      ],
+      "titleSelectors": [
+        "section.DetailPane[data-active=true] iframe",
+        "section.DetailPane h2"
+      ]
+    }
+  ]
+}

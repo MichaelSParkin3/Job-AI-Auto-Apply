@@ -84,6 +84,9 @@ playwright/.cache/
 *.log
 logs/
 
+# Binary artifacts
+*.png
+
 # Local AI debug and scratch
 .ai/*
 !.ai/.gitkeep

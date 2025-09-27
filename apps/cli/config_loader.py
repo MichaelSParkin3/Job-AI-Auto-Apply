@@ -28,6 +28,10 @@ DEFAULTS = {
     "browser_allowed_domains": ["*.simplyhired.com"],
     "browser_pacing_wait_jitter_ms": [100, 600],
     "browser_pacing_think_time_range_s": [1.0, 2.0],
+    "search_ready_retry_attempts": 1,
+    "search_ready_backoff_seconds": 2.0,
+    "search_ready_selector_override": None,
+    "search_ready_min_cards": 10,
 }
 
 
@@ -218,6 +222,10 @@ class Settings:
     browser_pacing_think_time_range_s: tuple[float, float] = tuple(
         DEFAULTS["browser_pacing_think_time_range_s"]
     )
+    search_ready_retry_attempts: int = DEFAULTS["search_ready_retry_attempts"]
+    search_ready_backoff_seconds: float = DEFAULTS["search_ready_backoff_seconds"]
+    search_ready_selector_override: str | None = DEFAULTS["search_ready_selector_override"]
+    search_ready_min_cards: int = DEFAULTS["search_ready_min_cards"]
     # Derived/env
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
@@ -343,9 +351,29 @@ class Settings:
                                 float(parts[0]),
                                 float(parts[1]),
                             ]
+                elif key.startswith("search_ready."):
+                    _, subkey = key.split(".", 1)
+                    if subkey == "retry_attempts":
+                        processed["search_ready_retry_attempts"] = int(value)
+                    elif subkey == "backoff_seconds":
+                        processed["search_ready_backoff_seconds"] = float(value)
+                    elif subkey == "selector_override":
+                        processed["search_ready_selector_override"] = str(value)
+                    elif subkey == "min_cards":
+                        processed["search_ready_min_cards"] = int(value)
                 else:
                     processed[key] = value
             data.update(processed)
+        search_ready_dict = data.pop("search_ready", {}) or {}
+        if isinstance(search_ready_dict, dict):
+            if "retry_attempts" in search_ready_dict and search_ready_dict["retry_attempts"] is not None:
+                data["search_ready_retry_attempts"] = int(search_ready_dict["retry_attempts"])
+            if "backoff_seconds" in search_ready_dict and search_ready_dict["backoff_seconds"] is not None:
+                data["search_ready_backoff_seconds"] = float(search_ready_dict["backoff_seconds"])
+            if "selector_override" in search_ready_dict and search_ready_dict["selector_override"]:
+                data["search_ready_selector_override"] = str(search_ready_dict["selector_override"])
+            if "min_cards" in search_ready_dict and search_ready_dict["min_cards"] is not None:
+                data["search_ready_min_cards"] = int(search_ready_dict["min_cards"])
         if "browser_allowed_domains" in data:
             domains = data["browser_allowed_domains"]
             data["browser_allowed_domains"] = tuple(str(item).strip() for item in domains if str(item).strip())
@@ -355,6 +383,17 @@ class Settings:
         if "browser_pacing_think_time_range_s" in data:
             think = data["browser_pacing_think_time_range_s"]
             data["browser_pacing_think_time_range_s"] = (float(think[0]), float(think[1]))
+        data["search_ready_retry_attempts"] = int(data.get("search_ready_retry_attempts", DEFAULTS["search_ready_retry_attempts"]))
+        data["search_ready_backoff_seconds"] = float(
+            data.get("search_ready_backoff_seconds", DEFAULTS["search_ready_backoff_seconds"])
+        )
+        if data.get("search_ready_selector_override"):
+            data["search_ready_selector_override"] = str(data["search_ready_selector_override"])
+        else:
+            data["search_ready_selector_override"] = None
+        data["search_ready_min_cards"] = int(
+            data.get("search_ready_min_cards", DEFAULTS["search_ready_min_cards"])
+        )
         return cls(**data)
 
     def to_json(self) -> str:
