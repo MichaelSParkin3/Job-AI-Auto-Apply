@@ -27,6 +27,109 @@ from .config_loader import (
 from .utils import ApiError, log_event
 
 
+@dataclass(frozen=True)
+class ProfileBinding:
+    """Resolved metadata required to bind a profile to runtime sessions."""
+
+    profile_id: str
+    display_name: str
+    resume_path: Path
+    user_data_dir: Path
+    qa_overrides: Dict[str, str]
+    model_overrides: Dict[str, Any]
+    browser_overrides: Dict[str, Any]
+    resume_exists: bool
+    errors: List[Dict[str, Any]]
+
+    @property
+    def is_valid(self) -> bool:
+        """Return True when validation produced no blocking errors."""
+
+        return not self.errors and self.resume_exists
+
+    def cli_payload(self) -> Dict[str, Any]:
+        """Return a JSON-serialisable payload for CLI consumers."""
+
+        return {
+            "id": self.profile_id,
+            "display_name": self.display_name,
+            "valid": self.is_valid,
+            "resume": {
+                "path": str(self.resume_path),
+                "exists": self.resume_exists,
+            },
+            "user_data_dir": str(self.user_data_dir),
+            "qa_overrides": dict(self.qa_overrides),
+            "model_overrides": dict(self.model_overrides),
+            "browser": dict(self.browser_overrides),
+            "errors": [dict(error) for error in self.errors],
+        }
+
+    def telemetry_payload(self) -> Dict[str, Any]:
+        """Return a redaction-friendly structure for log events and guardrails."""
+
+        return {
+            "id": self.profile_id,
+            "displayName": self.display_name,
+            "resume": {
+                "exists": self.resume_exists,
+            },
+            "userDataDir": str(self.user_data_dir),
+            "qaOverrideKeys": sorted(self.qa_overrides.keys()),
+            "model": self.model_overrides.get("llm"),
+            "browser": dict(self.browser_overrides),
+        }
+
+    def list_payload(self, *, active: bool) -> Dict[str, Any]:
+        """Return the structure used by `profiles list`."""
+
+        payload = self.cli_payload()
+        payload["active"] = active
+        return payload
+
+    @classmethod
+    def from_validation(
+        cls, base: Path, result: "ProfileValidationResult"
+    ) -> "ProfileBinding":
+        """Build a binding from a successful validation result."""
+
+        if not result.profile:
+            raise ValueError("Cannot build binding without a parsed profile.")
+
+        profile = result.profile
+        resume_path = profile.resolved_resume_path(base)
+        user_data_dir = profile.resolved_user_data_dir(base)
+        return cls(
+            profile_id=profile.id,
+            display_name=profile.display_name,
+            resume_path=resume_path,
+            user_data_dir=user_data_dir,
+            qa_overrides=dict(profile.qa_overrides),
+            model_overrides=dict(profile.model_overrides),
+            browser_overrides=profile.resolved_browser_overrides(),
+            resume_exists=result.resume_exists,
+            errors=[dict(error) for error in result.errors],
+        )
+
+    @classmethod
+    def demo(cls, base: Path, profile_id: str = "demo") -> "ProfileBinding":
+        """Return a permissive binding for the dry-run demo fallback."""
+
+        resume_path = (base / "data" / "resumes" / profile_id / "resume.pdf").resolve()
+        user_data_dir = (base / ".local" / "browser" / "profiles" / profile_id).resolve()
+        return cls(
+            profile_id=profile_id,
+            display_name="Demo profile",
+            resume_path=resume_path,
+            user_data_dir=user_data_dir,
+            qa_overrides={},
+            model_overrides={},
+            browser_overrides={},
+            resume_exists=resume_path.exists(),
+            errors=[],
+        )
+
+
 class IdentityConfig(BaseModel):
     """Represents the identity/contact section for a profile."""
 
@@ -421,18 +524,27 @@ class ProfileService:
         for path in sorted(self.profiles_dir.glob("*.yaml")):
             profile_id = path.stem
             result = self.validate_profile(profile_id)
-            items.append(
-                {
-                    "id": profile_id,
-                    "valid": result.is_valid,
-                    "resume": {
-                        "exists": result.resume_exists,
-                        "path": str(result.resume_path) if result.resume_path else None,
-                    },
-                    "active": profile_id == active,
-                    "errors": result.errors,
-                }
-            )
+            binding = self._binding_from_result(result)
+            if binding:
+                items.append(binding.list_payload(active=profile_id == active))
+            else:
+                items.append(
+                    {
+                        "id": profile_id,
+                        "display_name": None,
+                        "valid": False,
+                        "resume": {
+                            "exists": False,
+                            "path": None,
+                        },
+                        "user_data_dir": None,
+                        "qa_overrides": {},
+                        "model_overrides": {},
+                        "browser": {},
+                        "errors": result.errors,
+                        "active": profile_id == active,
+                    }
+                )
         return items
 
     # ------------------------------------------------------------------
@@ -465,21 +577,70 @@ class ProfileService:
         if not active:
             return None
         result = self.validate_profile(active)
-        data = {
+        binding = self._binding_from_result(result)
+        if binding:
+            return binding.cli_payload()
+        return {
             "id": active,
-            "valid": result.is_valid,
-            "resume": {
-                "exists": result.resume_exists,
-                "path": str(result.resume_path) if result.resume_path else None,
-            },
+            "display_name": None,
+            "valid": False,
+            "resume": {"exists": False, "path": None},
+            "user_data_dir": None,
+            "qa_overrides": {},
+            "model_overrides": {},
+            "browser": {},
             "errors": result.errors,
         }
-        if result.profile:
-            data.update(
-                {
-                    "display_name": result.profile.display_name,
-                    "user_data_dir": str(result.profile.resolved_user_data_dir(self.base)),
-                    "browser": result.profile.resolved_browser_overrides(),
-                }
+
+    # ------------------------------------------------------------------
+    # Binding helpers
+    # ------------------------------------------------------------------
+    def _binding_from_result(
+        self, result: ProfileValidationResult
+    ) -> ProfileBinding | None:
+        """Internal helper to convert validation results to bindings."""
+
+        if not result.profile:
+            return None
+        return ProfileBinding.from_validation(self.base, result)
+
+    def build_binding(self, profile_id: str) -> ProfileBinding | None:
+        """Return a binding even when the profile is not fully valid."""
+
+        result = self.validate_profile(profile_id)
+        return self._binding_from_result(result)
+
+    def bind_profile(
+        self,
+        profile_id: str,
+        *,
+        require_resume: bool = True,
+        allow_missing_profile: bool = False,
+    ) -> ProfileBinding:
+        """Return a validated binding or raise a structured error."""
+
+        result = self.validate_profile(profile_id)
+        binding = self._binding_from_result(result)
+        if not binding:
+            if allow_missing_profile:
+                return ProfileBinding.demo(self.base, profile_id=profile_id)
+            error = ApiError(
+                code="profiles.not_found",
+                message=f"Profile '{profile_id}' was not found.",
+                details={"errors": result.errors},
             )
-        return data
+            raise error
+
+        errors = list(result.errors)
+        if not require_resume:
+            errors = [err for err in errors if err.get("code") != "profiles.resume_missing"]
+
+        if errors or (require_resume and not binding.resume_exists):
+            error = ApiError(
+                code="profiles.validation_failed",
+                message=f"Profile '{profile_id}' failed validation.",
+                details={"errors": result.errors},
+            )
+            raise error
+
+        return binding

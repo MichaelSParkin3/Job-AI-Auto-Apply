@@ -1,0 +1,40 @@
+story: '2.3'
+story_title: 'Profile Binding & Resume Availability'
+gate: PASS
+status_reason: 'CLI profile binding flows validated end-to-end; telemetry, run-store metadata, and guardrail logging all align with acceptance criteria.'
+reviewer: 'Quinn (Test Architect)'
+updated: '2025-10-13T00:00:00Z'
+
+top_issues: []
+
+waiver:
+  active: false
+
+quality_score: 94
+expires: '2025-10-27T00:00:00Z'
+
+evidence:
+  tests_reviewed: 4
+  risks_identified: 1
+  trace:
+    ac_covered: [1, 2, 3, 4, 5]
+    ac_gaps: []
+    notes: 'Reviewed pytest suites for apply open, profile binding, profile CLI, and run store to confirm metadata consistency and error handling.'
+
+nfr_validation:
+  _assessed: [security, reliability, maintainability]
+  security:
+    status: PASS
+    notes: 'Telemetry payloads and run-store logs retain redaction guards for resume and PII content.'
+  reliability:
+    status: PASS
+    notes: 'Multi-profile switching, resume-missing failures, and run context persistence behave deterministically across test runs.'
+  maintainability:
+    status: PASS
+    notes: 'Shared ProfileBinding helper keeps CLI outputs aligned; test coverage enforces structure across commands.'
+
+recommendations:
+  immediate:
+    - 'Document dependency bootstrapping (pip install -e .) in QA runbook to avoid missing Typer/portalocker modules during future validations.'
+  future:
+    - 'Add smoke coverage for Windows absolute resume path expansion to guard against platform-specific regressions.'

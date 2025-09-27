@@ -114,6 +114,8 @@ python app.py profiles current
 python app.py profiles list
 ```
 
+`profiles current` returns the resolved session directory, resume presence, and browser overrides so you can confirm bindings before launching Browser-Use. Validation now surfaces actionable JSON errors (`profiles.validation_failed`) when the resume is missing or schema checks fail.
+
 > **Upgrading from earlier commits?** Create folders under `data/resumes/<id>/` and move your existing resumes there before running `profiles validate`.
 
 ### Browser-Use Session Bootstrap
@@ -129,7 +131,7 @@ python app.py apply open "https://www.simplyhired.com/search?q=python" \
   --model deepseek/deepseek-r1:free
 ```
 
-The command resolves the Chrome `user_data_dir` to `.local/browser/profiles/<profile>`, honors overrides from `config/config.yaml` or `data/profiles/<id>.yaml`, and returns a JSON payload with the session identifier so follow-up automation can reuse the same browser instance.
+The command resolves the Chrome `user_data_dir` to `.local/browser/profiles/<profile>`, honors overrides from `config/config.yaml` or `data/profiles/<id>.yaml`, and returns a JSON payload with the session identifier plus a `profile` object describing the active binding (resume path, QA overrides, guardrails). If the selected profile fails validation or the resume PDF is missing, the CLI exits with `profiles.validation_failed` before launching Chrome. Dry-run mode continues to fall back to the `demo` profile only when no active profile is configured.
 
 #### Stealth Guardrails & Pacing
 - **Domain allowlist** – navigation is limited to the configured domains (`browser.allowed_domains`). Profile YAML can append additional domains per-identity.

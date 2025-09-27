@@ -7,7 +7,6 @@ import os
 import sys
 from pathlib import Path
 
-import yaml
 from typer.testing import CliRunner
 
 sys.path.insert(0, os.getcwd())
@@ -23,13 +22,26 @@ def _init_profile(tmp_path: Path, profile_id: str = "frontend-dev") -> Path:
 
     profile_path = tmp_path / "data" / "profiles" / f"{profile_id}.yaml"
     if not profile_path.exists():
-        result = runner.invoke(app, ["profiles", "new", profile_id], color=False)
-        assert result.exit_code == 0, result.stdout
-    data = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
-    data.setdefault("identity", {})
-    data["identity"]["full_name"] = "Alex Example"
-    data["identity"]["email"] = "alex@example.com"
-    profile_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        profile_path.parent.mkdir(parents=True, exist_ok=True)
+        display = profile_id.replace("-", " ").title()
+        profile_yaml = f"""
+id: {json.dumps(profile_id)}
+display_name: {json.dumps(display)}
+identity:
+  full_name: "Alex Example"
+  email: "alex@example.com"
+  phone: null
+  location: null
+  portfolio: []
+documents:
+  resume_path: data/resumes/{profile_id}/resume.pdf
+model_overrides: {{}}
+qa_overrides: {{}}
+links: {{}}
+user_data_dir: .local/browser/profiles/{profile_id}
+browser: {{}}
+"""
+        profile_path.write_text(profile_yaml.strip() + "\n", encoding="utf-8")
     return profile_path
 
 
@@ -37,15 +49,15 @@ def _parse_json_output(output: str) -> dict:
     """Parse the trailing JSON object from CLI output."""
 
     lines = [line for line in output.splitlines() if line.strip()]
-    start_idx = None
     for idx in range(len(lines) - 1, -1, -1):
-        if lines[idx].strip().startswith("{") or lines[idx].strip().startswith("["):
-            start_idx = idx
-            break
-    if start_idx is None:
-        raise ValueError(f"No JSON payload found in output: {output!r}")
-    json_payload = "\n".join(lines[start_idx:])
-    return json.loads(json_payload)
+        candidate = lines[idx].strip()
+        if candidate.startswith("{") or candidate.startswith("["):
+            payload = "\n".join(lines[idx:])
+            try:
+                return json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+    raise ValueError(f"No JSON payload found in output: {output!r}")
 
 
 def test_profiles_validate_requires_resume(tmp_path: Path, monkeypatch):
@@ -68,6 +80,8 @@ def test_profiles_validate_requires_resume(tmp_path: Path, monkeypatch):
     assert result_ok.exit_code == 0
     summary = _parse_json_output(result_ok.stdout)
     assert summary["id"] == "frontend-dev"
+    assert summary["valid"] is True
+    assert summary["resume"]["exists"] is True
     assert summary["user_data_dir"].endswith("frontend-dev")
     assert summary["browser"] == {}
 
@@ -86,19 +100,21 @@ def test_profiles_use_sets_active_marker(tmp_path: Path, monkeypatch):
     payload = _parse_json_output(result_use.stdout)
     marker_path = Path(payload["marker"])
     assert marker_path.exists()
+    assert payload["profile"]["id"] == "frontend-dev"
+    assert payload["profile"]["valid"] is True
 
     settings = Settings.load(base=Path(str(tmp_path)))
     assert settings.active_profile == "frontend-dev"
 
     current = runner.invoke(app, ["profiles", "current"], color=False)
     assert current.exit_code == 0
-    current_payload = json.loads(current.stdout.strip())
+    current_payload = _parse_json_output(current.stdout)
     assert current_payload["id"] == "frontend-dev"
     assert current_payload["valid"] is True
     assert current_payload["browser"] == {}
 
     listing = runner.invoke(app, ["profiles", "list"], color=False)
     assert listing.exit_code == 0
-    entries = json.loads(listing.stdout)
+    entries = _parse_json_output(listing.stdout)
     assert entries[0]["id"] == "frontend-dev"
     assert entries[0]["active"] is True

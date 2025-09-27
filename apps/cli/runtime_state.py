@@ -6,7 +6,7 @@ import contextvars
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,7 @@ class RunContext:
     run_json_path: Path
     logs_path: Path
     profile_id: Optional[str]
+    profile_binding: Optional[Dict[str, Any]] = None
 
 
 _run_context: contextvars.ContextVar[Optional[RunContext]] = contextvars.ContextVar(

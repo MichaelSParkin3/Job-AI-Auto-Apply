@@ -76,3 +76,5 @@
     - [Architect Prompt](./next-steps.md#architect-prompt)
 
 > **Update (Story 2.2):** Browser automation now enforces a configurable domain allowlist, one-tab policy, and pacing defaults surfaced through `browser.allowed_domains` and `browser.pacing.*` settings. See the README “Stealth Guardrails & Pacing” section for the live contract.
+>
+> **Update (Story 2.3):** `apply open` now requires a validated profile binding before launching Chrome, surfaces `profiles.validation_failed` errors when resumes are missing, and returns a structured `profile` payload so downstream automation can access resume paths, QA overrides, and guardrail metadata without reading YAML mid-run.

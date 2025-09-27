@@ -29,7 +29,21 @@ def test_run_store_creates_seeded_run(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     store = RunStore(base=tmp_path)
-    record = store.start_demo_run(profile_id="demo-profile")
+    binding_payload = {
+        "id": "demo-profile",
+        "display_name": "Demo Profile",
+        "valid": True,
+        "resume": {"path": "/tmp/demo-profile/resume.pdf", "exists": True},
+        "user_data_dir": "/tmp/browser/demo-profile",
+        "qa_overrides": {},
+        "model_overrides": {},
+        "browser": {},
+        "errors": [],
+    }
+    record = store.start_demo_run(
+        profile_id="demo-profile",
+        profile_binding=binding_payload,
+    )
 
     assert record.run_dir.exists()
     data = json.loads(record.run_json_path.read_text(encoding="utf-8"))
@@ -41,8 +55,13 @@ def test_run_store_creates_seeded_run(tmp_path: Path, monkeypatch: pytest.Monkey
     assert data["preview"]["decision"] == "pending"
     assert data["metadata"]["profileLabel"] == "Demo Profile"
     assert data["metadata"]["mode"] == "demo"
+    assert data["metadata"]["profileBinding"] == binding_payload
     screenshot_path = Path(data["preview"]["screenshotPath"])
     assert screenshot_path.exists()
+
+    context = get_run_context()
+    assert context is not None
+    assert context.profile_binding == binding_payload
 
     log_event(
         {
