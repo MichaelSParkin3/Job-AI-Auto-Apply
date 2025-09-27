@@ -27,6 +27,11 @@
 
 **Dependencies:** Playwright, model driver (OpenRouter key)
 
+**Implementation Notes:**
+- The `BrowserUseController` lives in `apps/browser/controller.py` and wraps the upstream Browser-Use session with strongly typed primitives (`open_url`, `wait_for_idle`, `safe_click`).
+- Configuration is resolved via `Settings` + profile overrides; Chrome sessions persist to `.local/browser/profiles/<profile>` and enforce a 1366×768 default viewport (overridable per profile).
+- `python app.py apply open` bootstraps the controller, logs guardrail events, and returns a JSON session handle for follow-on automation stories.
+
 **Technology Stack:** Browser‑Use + Playwright (Python)
 
 ## Artifact & History Store

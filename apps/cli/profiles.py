@@ -61,6 +61,31 @@ class DocumentsConfig(BaseModel):
         return value
 
 
+class BrowserOverridesConfig(BaseModel):
+    """Optional Browser-Use overrides stored on the profile."""
+
+    model: str | None = Field(default=None, description="Override Browser-Use model")
+    locale: str | None = Field(default=None, description="Override browser locale")
+    timezone: str | None = Field(default=None, description="Override browser timezone")
+    viewport: Dict[str, int | None] = Field(
+        default_factory=dict,
+        description="Optional viewport overrides with width/height keys",
+    )
+    chrome_path: str | None = Field(
+        default=None, description="Override Chrome executable for this profile"
+    )
+
+    @model_validator(mode="after")
+    def validate_viewport(self) -> "BrowserOverridesConfig":
+        width = self.viewport.get("width") if isinstance(self.viewport, dict) else None
+        height = self.viewport.get("height") if isinstance(self.viewport, dict) else None
+        if width is not None and width <= 0:
+            raise ValueError("browser.viewport.width must be positive")
+        if height is not None and height <= 0:
+            raise ValueError("browser.viewport.height must be positive")
+        return self
+
+
 class ProfileConfig(BaseModel):
     """Pydantic model representing a profile configuration."""
 
@@ -75,6 +100,11 @@ class ProfileConfig(BaseModel):
         default=None,
         alias="user_data_dir",
         description="Browser session directory",
+    )
+    browser: BrowserOverridesConfig | None = Field(
+        default=None,
+        alias="browser",
+        description="Browser-Use overrides for this profile",
     )
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
@@ -123,6 +153,32 @@ class ProfileConfig(BaseModel):
             directory = (base / directory).resolve()
         return directory
 
+    def resolved_browser_overrides(self) -> Dict[str, Any]:
+        """Return normalized browser overrides for CLI/config merging."""
+
+        if not self.browser:
+            return {}
+        overrides: Dict[str, Any] = {}
+        if self.browser.model:
+            overrides["model"] = self.browser.model
+        if self.browser.locale:
+            overrides["locale"] = self.browser.locale
+        if self.browser.timezone:
+            overrides["timezone"] = self.browser.timezone
+        if isinstance(self.browser.viewport, dict):
+            viewport: Dict[str, int] = {}
+            width = self.browser.viewport.get("width")
+            height = self.browser.viewport.get("height")
+            if isinstance(width, int) and width > 0:
+                viewport["width"] = width
+            if isinstance(height, int) and height > 0:
+                viewport["height"] = height
+            if viewport:
+                overrides["viewport"] = viewport
+        if self.browser.chrome_path:
+            overrides["chrome_path"] = self.browser.chrome_path
+        return overrides
+
 
 @dataclass
 class ProfileValidationResult:
@@ -164,6 +220,14 @@ PROFILE_TEMPLATE = (
     "qa_overrides: {{}}\n"
     "links: {{}}\n"
     "user_data_dir: .local/browser/profiles/{profile_id}\n"
+    "browser:\n"
+    "  model: null\n"
+    "  locale: null\n"
+    "  timezone: null\n"
+    "  viewport:\n"
+    "    width: null\n"
+    "    height: null\n"
+    "  chrome_path: null\n"
 )
 
 
@@ -359,6 +423,7 @@ class ProfileService:
                 {
                     "display_name": result.profile.display_name,
                     "user_data_dir": str(result.profile.resolved_user_data_dir(self.base)),
+                    "browser": result.profile.resolved_browser_overrides(),
                 }
             )
         return data

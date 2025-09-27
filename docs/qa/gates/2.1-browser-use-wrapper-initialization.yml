@@ -1,0 +1,56 @@
+story: '2.1'
+story_title: 'Browser-Use Wrapper Initialization'
+gate: FAIL
+status_reason: 'Import regressions prevent the CLI/controller from loading and the new pytest suite from executing; Browser-Use session cannot launch.'
+reviewer: 'Quinn (Test Architect)'
+updated: '2025-10-05T00:00:00Z'
+
+top_issues:
+  - id: AC1
+    title: 'Settings module cannot be imported'
+    severity: BLOCKER
+    detail: 'apps/cli/config_loader.py dropped required imports (os/json/Path/dataclass/etc.), so importing Settings raises NameError before apply open can resolve browser defaults or guardrail logging.'
+  - id: AC5
+    title: 'BrowserUseController raises NameError during initialization'
+    severity: BLOCKER
+    detail: 'BrowserUseController references uuid.uuid4 without importing uuid, so controller construction fails and none of the wrapper primitives execute.'
+  - id: TEST
+    title: 'Added pytest modules fail on missing json/os/sys imports'
+    severity: MAJOR
+    detail: 'core/tests/test_apply_open.py and related tests lack json/os/sys imports, causing pytest collection to abort instead of validating guardrails and telemetry promised in Testing Expectations.'
+
+waiver:
+  active: false
+
+quality_score: 25
+expires: '2025-10-12T00:00:00Z'
+
+evidence:
+  tests_reviewed: 4
+  risks_identified: 3
+  trace:
+    ac_covered: []
+    ac_gaps: [1, 2, 3, 4, 5]
+    notes: 'Runtime import errors stop the CLI before Browser-Use launch; pytest cannot execute to verify acceptance criteria.'
+
+nfr_validation:
+  _assessed: [security, performance, reliability, maintainability]
+  security:
+    status: WARN
+    notes: 'Guardrail logging never executes because the CLI aborts on import, leaving dry-run assurances unverified.'
+  performance:
+    status: FAIL
+    notes: 'Browser session never launches; no evidence the wrapper meets responsiveness expectations.'
+  reliability:
+    status: FAIL
+    notes: 'NameErrors during module import indicate unstable integration and prevent exercising happy path flows.'
+  maintainability:
+    status: WARN
+    notes: 'Dropped imports suggest missing automated lint/type checks; future refactors risk similar regressions.'
+
+recommendations:
+  immediate:
+    - 'Restore the missing imports in apps/cli/config_loader.py, apps/browser/controller.py, and new pytest modules; run pytest -q to confirm the suite executes.'
+    - 'Add integration coverage demonstrating BrowserUseController open_url success (including guardrail telemetry) once imports are fixed.'
+  future:
+    - 'Introduce linting/static analysis (ruff, mypy) in CI to catch missing import regressions before QA review.'

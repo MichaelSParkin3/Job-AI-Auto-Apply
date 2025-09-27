@@ -65,3 +65,37 @@ def test_env_loading_missing_and_present(tmp_path: Path, monkeypatch):
     s2 = Settings.load()
     assert s2.OPENROUTER_API_KEY == "abc123"
     assert s2.OPENROUTER_MODEL == "demo-model"
+
+
+def test_settings_browser_overrides_from_config(tmp_path: Path, monkeypatch):
+    """Nested browser keys in config.yaml and CLI overrides are respected."""
+    from apps.cli.config_loader import Settings, ensure_runtime_dirs, config_path
+
+    monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    ensure_runtime_dirs(tmp_path)
+    cfg = config_path(tmp_path)
+    cfg.write_text(
+        """
+browser:
+  model: nested-model
+  locale: en-GB
+  timezone: Europe/London
+  viewport:
+    width: 1440
+    height: 900
+""",
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(base=tmp_path)
+    assert settings.browser_model == "nested-model"
+    assert settings.browser_locale == "en-GB"
+    assert settings.browser_timezone == "Europe/London"
+    assert settings.browser_viewport_width == 1440
+    assert settings.browser_viewport_height == 900
+
+    override_settings = Settings.load(
+        base=tmp_path, overrides={"browser.model": "cli-model", "browser.viewport_width": 1600}
+    )
+    assert override_settings.browser_model == "cli-model"
+    assert override_settings.browser_viewport_width == 1600

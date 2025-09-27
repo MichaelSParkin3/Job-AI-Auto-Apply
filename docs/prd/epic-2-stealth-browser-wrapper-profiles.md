@@ -9,7 +9,7 @@ I want a thin wrapper around Browser-Use configured for headful Chrome,
 so that automation starts consistently with stealth and reuse of sessions.
 
 Acceptance Criteria
-1: `apply --dry-run --open <search_url>` launches headful Chrome with `keep_alive=true`.
+1: `apply open <search_url> --dry-run` launches headful Chrome with `keep_alive=true`.
 2: `user_data_dir` is `.local/browser/profiles/<profile>` and persists cookies across runs.
 3: Window opens with stable viewport (e.g., 1366x768) and OS locale/timezone.
 4: Default model set from config/profile; override via CLI without crash.

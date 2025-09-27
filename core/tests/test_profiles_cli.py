@@ -69,6 +69,7 @@ def test_profiles_validate_requires_resume(tmp_path: Path, monkeypatch):
     summary = _parse_json_output(result_ok.stdout)
     assert summary["id"] == "frontend-dev"
     assert summary["user_data_dir"].endswith("frontend-dev")
+    assert summary["browser"] == {}
 
 
 def test_profiles_use_sets_active_marker(tmp_path: Path, monkeypatch):
@@ -94,6 +95,7 @@ def test_profiles_use_sets_active_marker(tmp_path: Path, monkeypatch):
     current_payload = json.loads(current.stdout.strip())
     assert current_payload["id"] == "frontend-dev"
     assert current_payload["valid"] is True
+    assert current_payload["browser"] == {}
 
     listing = runner.invoke(app, ["profiles", "list"], color=False)
     assert listing.exit_code == 0

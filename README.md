@@ -116,6 +116,21 @@ python app.py profiles list
 
 > **Upgrading from earlier commits?** Create folders under `data/resumes/<id>/` and move your existing resumes there before running `profiles validate`.
 
+### Browser-Use Session Bootstrap
+Use the new `apply open` command to launch Browser-Use in headful Chrome with profile-bound persistence:
+
+```bash
+# Launch a dry-run Browser-Use session for the active profile
+python app.py apply open "https://www.simplyhired.com/search?q=python&l=remote"
+
+# Override the profile and Browser-Use model for this invocation
+python app.py apply open "https://www.simplyhired.com/search?q=python" \
+  --profile frontend-dev \
+  --model deepseek/deepseek-r1:free
+```
+
+The command resolves the Chrome `user_data_dir` to `.local/browser/profiles/<profile>`, honors overrides from `config/config.yaml` or `data/profiles/<id>.yaml`, and returns a JSON payload with the session identifier so follow-up automation can reuse the same browser instance.
+
 ### Tests
 ```bash
 pytest -q

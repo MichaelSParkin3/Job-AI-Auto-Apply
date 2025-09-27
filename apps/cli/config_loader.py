@@ -20,6 +20,11 @@ DEFAULTS = {
     "dry_run": False,
     "preview_port": 4950,
     "chrome_path": None,
+    "browser_model": "deepseek/deepseek-chat-v3.1:free",
+    "browser_locale": "en-US",
+    "browser_timezone": "America/Los_Angeles",
+    "browser_viewport_width": 1366,
+    "browser_viewport_height": 768,
 }
 
 
@@ -198,6 +203,11 @@ class Settings:
     dry_run: bool = DEFAULTS["dry_run"]
     preview_port: int = DEFAULTS["preview_port"]
     chrome_path: str | None = DEFAULTS["chrome_path"]
+    browser_model: str = DEFAULTS["browser_model"]
+    browser_locale: str = DEFAULTS["browser_locale"]
+    browser_timezone: str = DEFAULTS["browser_timezone"]
+    browser_viewport_width: int = DEFAULTS["browser_viewport_width"]
+    browser_viewport_height: int = DEFAULTS["browser_viewport_height"]
     # Derived/env
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
@@ -244,9 +254,48 @@ class Settings:
         data.update({k: v for k, v in env.items() if v is not None})
         if marker_profile := load_active_profile(base):
             data["active_profile"] = marker_profile
+        # Allow nested browser config in YAML/env overrides (browser.* keys)
+        browser_dict = data.pop("browser", {}) or {}
+        if isinstance(browser_dict, dict):
+            if "model" in browser_dict and browser_dict["model"]:
+                data["browser_model"] = browser_dict["model"]
+            if "locale" in browser_dict and browser_dict["locale"]:
+                data["browser_locale"] = browser_dict["locale"]
+            if "timezone" in browser_dict and browser_dict["timezone"]:
+                data["browser_timezone"] = browser_dict["timezone"]
+            viewport = browser_dict.get("viewport")
+            if isinstance(viewport, dict):
+                width = viewport.get("width")
+                height = viewport.get("height")
+                if isinstance(width, int) and width > 0:
+                    data["browser_viewport_width"] = width
+                if isinstance(height, int) and height > 0:
+                    data["browser_viewport_height"] = height
+            if browser_dict.get("chrome_path"):
+                data["chrome_path"] = browser_dict["chrome_path"]
         # CLI overrides last
         if overrides:
-            data.update({k: v for k, v in overrides.items() if v is not None})
+            processed: Dict[str, Any] = {}
+            for key, value in overrides.items():
+                if value is None:
+                    continue
+                if key.startswith("browser."):
+                    _, subkey = key.split(".", 1)
+                    if subkey == "model":
+                        processed["browser_model"] = value
+                    elif subkey == "locale":
+                        processed["browser_locale"] = value
+                    elif subkey == "timezone":
+                        processed["browser_timezone"] = value
+                    elif subkey == "viewport_width":
+                        processed["browser_viewport_width"] = int(value)
+                    elif subkey == "viewport_height":
+                        processed["browser_viewport_height"] = int(value)
+                    elif subkey == "chrome_path":
+                        processed["chrome_path"] = value
+                else:
+                    processed[key] = value
+            data.update(processed)
         return cls(**data)
 
     def to_json(self) -> str:
