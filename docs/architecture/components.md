@@ -70,3 +70,10 @@ C4Container
 ```
 
 ---
+
+## Browser‑Use 0.7.x Update (2025‑09‑28)
+- Controller now adapts the async Browser‑Use `BrowserSession` (event‑driven) into synchronous primitives used by the CLI (`open_url`, `wait_for_idle`, `safe_click`, `get_page_html`).
+- Adapter waits for `BrowserConnectedEvent`/focus; if the window is on `chrome://newtab`/Google, it triggers a CDP `Page.navigate` fallback to the target URL to avoid stalls.
+- Locale/timezone are applied via environment (`LANG`/`LC_ALL`/`TZ`), `Accept-Language`, and `--lang`; deprecated `locale`/`timezone_id` kwargs are no longer passed to `BrowserSession`.
+- Session backups are created under `.local/browser/backups/<profile>` and skip Chrome cache/lock files to reduce permission errors; retention is configurable.
+- Readiness selectors include a 2025 variant using `data-testid` attributes to align with current SimplyHired markup.

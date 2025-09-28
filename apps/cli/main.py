@@ -39,12 +39,25 @@ from .utils import ApiError, log_event
 app = typer.Typer(help="Job AI Auto Apply CLI")
 
 
+def _configure_console_utf8() -> None:
+    """Best-effort: make Windows console UTF-8 safe for emoji logs from dependencies."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 @app.callback()
 def init(_: bool = typer.Option(False, "--version", help="Show version")):
     """Initialize the application state before running any command.
 
     Ensures that all required runtime directories exist.
     """
+    _configure_console_utf8()
     # Create runtime dirs early (AC #4)
     ensure_runtime_dirs()
 
@@ -241,6 +254,9 @@ def apply_open(
     backups_enabled = settings.browser_session_backups_enabled
     if binding.session_backups_enabled is not None:
         backups_enabled = binding.session_backups_enabled
+    # Default: disable backups for live runs unless explicitly enabled by CLI or profile
+    if not dry_run and session_backups is None and binding.session_backups_enabled is None:
+        backups_enabled = False
     backups_retention = settings.browser_session_backups_retention
     if binding.session_backups_retention is not None:
         try:

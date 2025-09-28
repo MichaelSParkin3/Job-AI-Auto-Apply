@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Protocol
 
 from apps.cli.utils import log_event
 from .guardrails import NavigationGuardrails
+
+if TYPE_CHECKING:  # pragma: no cover - import for type hints only
+    from browser_use.browser import BrowserSession
 
 
 class BrowserUseError(RuntimeError):
@@ -75,6 +82,218 @@ class BrowserClient(Protocol):
 ClientFactory = Callable[[BrowserLaunchConfig], BrowserClient]
 
 
+class BrowserSessionAdapter:
+    """Adapts async BrowserSession API to legacy synchronous controller expectations."""
+
+    def __init__(self, session: "BrowserSession") -> None:
+        self._session = session
+        self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(
+            target=self._run_loop,
+            name="browser-use-session",
+            daemon=True,
+        )
+        self._loop_thread.start()
+        self._closed = False
+        # Start the Browser-Use session on the background loop and wait for connection.
+        self._run(self._session.start())
+        # Wait until BrowserConnectedEvent fires or CDP/agent_focus are set.
+        try:
+            self._run(self._await_session_ready(timeout=45.0))
+        except Exception:
+            # Continue; downstream _ensure_focus_ready will raise a clearer error if still not ready
+            pass
+
+    # ------------------------------------------------------------------
+    # Public API compatible with legacy controller
+    # ------------------------------------------------------------------
+    def open_url(self, url: str) -> Dict[str, Any]:
+        return self._run(self._navigate(url))
+
+    def wait_for_idle(self, timeout: float = 5.0) -> Dict[str, Any]:
+        timeout = max(timeout, 0.0)
+        result = self._run(self._wait_for_ready_state(timeout))
+        return {"readyState": result}
+
+    def safe_click(self, selector: str, timeout: float | None = None) -> Dict[str, Any]:
+        result = self._run(self._click_selector(selector, timeout))
+        return {"selector": selector, "result": result}
+
+    def get_page_content(self) -> str:
+        return self._run(self._get_outer_html())
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        try:
+            self._run(self._session.stop())
+        except Exception:  # pragma: no cover - best-effort shutdown
+            pass
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join(timeout=1)
+            self._closed = True
+
+    def __del__(self) -> None:  # pragma: no cover - destructor safety net
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Internal helpers running on the background asyncio loop
+    # ------------------------------------------------------------------
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _run(self, coroutine: Any) -> Any:
+        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        return future.result()
+
+    async def _ensure_focus_ready(self, deadline: float | None = None) -> None:
+        if deadline is None:
+            deadline = time.monotonic() + 60.0
+        while self._session.agent_focus is None or self._session.cdp_url is None:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Browser session focus not ready")
+            await asyncio.sleep(0.1)
+
+    async def _await_session_ready(self, timeout: float = 45.0) -> None:
+        """Await Browser-Use connection readiness by listening for events or polling state."""
+        try:
+            from browser_use.browser.events import BrowserConnectedEvent, AgentFocusChangedEvent
+        except Exception:
+            # Fallback to polling
+            await self._ensure_focus_ready(time.monotonic() + timeout)
+            return
+
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+
+        async def on_connected(_event) -> None:
+            if not fut.done():
+                fut.set_result(True)
+
+        async def on_focus(_event) -> None:
+            if self._session.agent_focus is not None and not fut.done():
+                fut.set_result(True)
+
+        # Register lightweight one-time listeners
+        self._session.event_bus.on(BrowserConnectedEvent, on_connected)
+        self._session.event_bus.on(AgentFocusChangedEvent, on_focus)
+
+        # Also race with simple polling in case events were emitted before listeners attached
+        async def _poll():
+            end = time.monotonic() + timeout
+            while time.monotonic() < end and not fut.done():
+                if self._session.cdp_url and self._session.agent_focus is not None:
+                    if not fut.done():
+                        fut.set_result(True)
+                        break
+                await asyncio.sleep(0.1)
+            if not fut.done():
+                fut.set_exception(TimeoutError("Timeout waiting for BrowserConnectedEvent"))
+
+        await asyncio.wait_for(asyncio.gather(fut, _poll()), timeout=timeout)
+
+    async def _navigate(self, url: str) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        from browser_use.browser.events import NavigateToUrlEvent
+
+        # Primary path: event-driven navigation
+        event = self._session.event_bus.dispatch(NavigateToUrlEvent(url=url, new_tab=False))
+        await event
+        await event.event_result(raise_if_any=True, raise_if_none=False)
+
+        # Verify navigation actually pointed at the intended origin; if not, force CDP navigate.
+        try:
+            href = await self._evaluate_js("(() => window.location.href)()")
+        except Exception:
+            href = None
+        if not isinstance(href, str) or href.strip() == "" or href.startswith("chrome://"):
+            # Fallback: direct CDP navigate on the focused session
+            cdp_session = await self._session.get_or_create_cdp_session()
+            await cdp_session.cdp_client.send.Page.navigate(
+                params={
+                    "url": url,
+                    "transitionType": "typed",
+                },
+                session_id=cdp_session.session_id,
+            )
+        return {"url": url}
+
+    async def _wait_for_ready_state(self, timeout: float) -> str:
+        await self._ensure_focus_ready()
+        end = time.monotonic() + timeout
+        last_state = "loading"
+        while time.monotonic() <= end:
+            try:
+                state = await self._evaluate_js("(() => document.readyState)()")
+                if isinstance(state, str):
+                    last_state = state
+                    if state.lower() == "complete":
+                        return state
+            except Exception:
+                # Ignore transient evaluation issues during navigation
+                pass
+            await asyncio.sleep(0.25)
+        return last_state
+
+    async def _click_selector(self, selector: str, timeout: float | None) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        deadline = time.monotonic() + (timeout if timeout is not None else 5.0)
+        last_error: Dict[str, Any] | None = None
+        while True:
+            expression = (
+                "(() => {\n"
+                f"  const selector = {json.dumps(selector)};\n"
+                "  const element = document.querySelector(selector);\n"
+                "  if (!element) { return { ok: false, reason: 'not_found' }; }\n"
+                "  element.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });\n"
+                "  const rect = element.getBoundingClientRect();\n"
+                "  try {\n"
+                "    if (typeof element.click === 'function') { element.click(); }\n"
+                "    else { element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); }\n"
+                "    return { ok: true, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, tagName: element.tagName };\n"
+                "  } catch (error) {\n"
+                "    return { ok: false, reason: 'click_failed', message: String(error), tagName: element.tagName };\n"
+                "  }\n"
+                "})()"
+            )
+            try:
+                result = await self._evaluate_js(expression)
+            except Exception as exc:  # pragma: no cover - propagate evaluation issues
+                last_error = {"ok": False, "reason": "evaluation_failed", "message": str(exc)}
+                result = last_error
+            if isinstance(result, dict) and result.get("ok"):
+                return result
+            last_error = result if isinstance(result, dict) else {"ok": False, "reason": "unknown", "result": result}
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Failed to click selector {selector}: {last_error}")
+            await asyncio.sleep(0.25)
+
+    async def _get_outer_html(self) -> str:
+        await self._ensure_focus_ready()
+        html = await self._evaluate_js("(() => document.documentElement.outerHTML)()")
+        if not isinstance(html, str):
+            raise RuntimeError("Browser session did not return HTML content")
+        return html
+
+    async def _evaluate_js(self, expression: str) -> Any:
+        await self._ensure_focus_ready()
+        cdp_session = await self._session.get_or_create_cdp_session()
+        result = await cdp_session.cdp_client.send.Runtime.evaluate(
+            params={
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+            session_id=cdp_session.session_id,
+        )
+        return result.get("result", {}).get("value")
+
+
 def create_browser_client(config: BrowserLaunchConfig) -> BrowserClient:
     """Instantiate a Browser-Use client using the official library."""
 
@@ -85,16 +304,42 @@ def create_browser_client(config: BrowserLaunchConfig) -> BrowserClient:
             "browser-use package is not installed. Install it to launch headful Chrome."
         ) from exc
 
+    # Browser-Use 0.7+ expects window dimensions as dicts and locale/timezone via env/headers.
+    window_size = {"width": config.viewport_width, "height": config.viewport_height}
+
+    def _normalize_locale(value: str) -> str:
+        normalized = value.replace("-", "_")
+        return normalized if "." in normalized else f"{normalized}.UTF-8"
+
+    env: Dict[str, str] = {}
+    if config.timezone:
+        env["TZ"] = config.timezone
+    if config.locale:
+        env_locale = _normalize_locale(config.locale)
+        env.update({
+            "LANG": env_locale,
+            "LC_ALL": env_locale,
+        })
+
+    headers: Dict[str, str] = {}
+    if config.locale:
+        headers["Accept-Language"] = f"{config.locale},en;q=0.8"
+
+    args = [f"--lang={config.locale}"] if config.locale else []
+
     session = BrowserSession(
         headless=False,
         user_data_dir=str(config.user_data_dir),
         executable_path=config.chrome_path,
-        window_size=(config.viewport_width, config.viewport_height),
-        locale=config.locale,
-        timezone_id=config.timezone,
-        keep_profile_dir=True,
+        window_size=window_size,
+        allowed_domains=list(config.guardrail_domains),
+        keep_alive=config.keep_alive,
+        enable_default_extensions=False,
+        env=env or None,
+        headers=headers or None,
+        args=args or None,
     )
-    return session
+    return BrowserSessionAdapter(session)
 
 
 class BrowserUseController:
