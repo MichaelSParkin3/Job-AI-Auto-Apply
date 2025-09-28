@@ -15,6 +15,7 @@ except ModuleNotFoundError:  # pragma: no cover - executed only when typer missi
 sys.path.insert(0, os.getcwd())
 from apps.browser import BrowserLaunchError, SessionBackupManager
 from apps.cli.main import app
+from apps.preview.constants import placeholder_screenshot_bytes
 from sites.simplyhired.form_mapper import FormFillPlanField, FormStructureMapper
 
 
@@ -157,6 +158,7 @@ class RecordingClient:
         self.checkbox_calls: list[tuple[str, bool]] = []
         self.state_calls: list[tuple[str, str]] = []
         self.upload_calls: list[tuple[str, tuple[str, ...]]] = []
+        self.screenshot_calls: list[str] = []
         self._field_values: dict[str, str] = {}
         self._checkbox_states: dict[str, bool] = {}
 
@@ -233,6 +235,11 @@ class RecordingClient:
         self.upload_calls.append((selector, normalized))
         files = [{"name": Path(path).name, "size": 1024} for path in normalized]
         return {"result": {"ok": True, "files": files}}
+
+    def capture_review_screenshot(self, path: str) -> dict[str, Any]:
+        self.screenshot_calls.append(path)
+        Path(path).write_bytes(placeholder_screenshot_bytes())
+        return {"path": path, "method": "recording"}
 
 
 def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
@@ -327,6 +334,17 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     assert payload["telemetry"]["quickApplyDiscovery"]["processed"] == 0
     assert payload["telemetry"]["quickApplyDiscovery"]["opened"] == 0
 
+    preview = payload["preview"]
+    summary_preview = preview["summary"]
+    assert summary_preview["headline"]["title"] in {"", None}
+    assert summary_preview["form"]["filledFields"] >= 0
+    screenshot_info = preview["screenshot"]
+    screenshot_path = Path(screenshot_info["path"])
+    assert screenshot_path.exists()
+    assert screenshot_info["method"] in {"recording", "browser-use", "playwright", "synthetic"}
+    telemetry_summary = payload["telemetry"]["summary"]
+    assert telemetry_summary["screenshot"]["method"] == screenshot_info.get("method")
+
     form_plan = payload["formPlan"]
     assert form_plan["summary"] == {
         "artifacts": 0,
@@ -342,9 +360,11 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
 
     run_dir = Path(payload["run"]["artifactsDir"])
     run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-    assert run_json["status"] == "quick_apply_discovery"
+    assert run_json["status"] == "review"
     assert run_json["discovery"]["summary"]["processedCount"] == 0
     assert run_json["formPlan"]["summary"]["mappedFields"] == 0
+    assert run_json["preview"]["summary"]["form"]["filledFields"] >= 0
+    assert Path(run_json["preview"]["screenshotPath"]).exists()
     backups = payload["backups"]
     assert backups["enabled"] is True
     assert backups["retention"] == 2
@@ -395,8 +415,8 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     ]
     assert history_entries, "Expected at least one history entry"
     last_entry = history_entries[-1]
-    assert last_entry["fingerprint"].endswith("form-plan")
-    assert last_entry["summary"]["mappedFields"] == 0
+    assert last_entry["fingerprint"].endswith("summary")
+    assert "screenshots" in last_entry
 
 
 def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
@@ -521,10 +541,27 @@ def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
         for line in history_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert len(history_entries) >= 2
-    assert history_entries[-1]["fingerprint"].endswith("form-fill")
-    assert history_entries[-1]["summary"]["artifacts"] == 1
-    assert history_entries[-2]["summary"]["mappedFields"] == form_plan["summary"]["mappedFields"]
+    assert len(history_entries) >= 4
+    form_plan_entry = history_entries[-4]
+    form_fill_entry = history_entries[-3]
+    resume_entry = history_entries[-2]
+    summary_entry = history_entries[-1]
+
+    assert form_plan_entry["fingerprint"].endswith("form-plan")
+    assert form_plan_entry["summary"]["mappedFields"] == form_plan["summary"]["mappedFields"]
+
+    assert form_fill_entry["fingerprint"].endswith("form-fill")
+    assert form_fill_entry["summary"]["artifacts"] == form_fill["summary"]["artifacts"]
+
+    assert resume_entry["fingerprint"].endswith("resume-upload")
+    assert resume_entry["summary"]["status"] == resume_payload["status"]
+
+    assert summary_entry["fingerprint"].endswith("summary")
+    assert summary_entry["summary"]["filled"] == form_fill["summary"]["filledFields"]
+    assert summary_entry["summary"]["issues"] == form_fill["summary"]["issues"]
+    preview_summary = payload["preview"]["summary"]
+    assert summary_entry["summary"]["title"] == preview_summary["headline"]["title"]
+    assert summary_entry.get("screenshots")
 
 
 def test_apply_open_blocks_when_resume_missing(tmp_path: Path, monkeypatch):

@@ -161,7 +161,7 @@ class SessionBackupManager:
             )
             return summary
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
         final_dir = profile_root / f"{timestamp}-{uuid.uuid4().hex[:6]}"
         temp_dir = Path(
             tempfile.mkdtemp(prefix=".tmp-backup-", dir=str(profile_root))

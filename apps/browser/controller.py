@@ -8,7 +8,7 @@ import threading
 import hashlib
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -23,6 +23,7 @@ from typing import (
 )
 
 from apps.cli.utils import log_event
+from apps.preview.constants import placeholder_screenshot_bytes
 from .guardrails import NavigationGuardrails
 
 if TYPE_CHECKING:  # pragma: no cover - import for type hints only
@@ -73,6 +74,33 @@ class BrowserActionResult:
     telemetry: Dict[str, Any]
 
 
+@dataclass(slots=True)
+class ReviewArtifactCapture:
+    """Represents the outcome of capturing a review screenshot."""
+
+    screenshot_path: Path
+    method: str
+    html_path: Path | None = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "path": str(self.screenshot_path),
+            "method": self.method,
+        }
+        if self.html_path is not None:
+            payload["htmlPath"] = str(self.html_path)
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+    def telemetry_payload(self) -> dict[str, Any]:
+        payload = {"method": self.method}
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
 class BrowserClient(Protocol):
     """Protocol representing the Browser-Use client we interact with."""
 
@@ -108,6 +136,9 @@ class BrowserClient(Protocol):
 
     def set_input_files(self, selector: str, paths: Sequence[str]) -> Any:  # pragma: no cover
         """Attach files to an <input type="file"> element."""
+
+    def capture_review_screenshot(self, path: str) -> Any:  # pragma: no cover - optional
+        """Optional helper provided by Browser-Use to capture review screenshots."""
 
 
 ClientFactory = Callable[[BrowserLaunchConfig], BrowserClient]
@@ -715,6 +746,22 @@ class BrowserUseController:
             info["sha256"] = None
         return info
 
+    @staticmethod
+    def _sanitize_capture_result(result: Any) -> Dict[str, Any]:
+        if isinstance(result, Mapping):
+            sanitized: Dict[str, Any] = {}
+            for key, value in result.items():
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    sanitized[key] = value
+                elif isinstance(value, Mapping):
+                    sanitized[key] = {
+                        k: v
+                        for k, v in value.items()
+                        if isinstance(v, (str, int, float, bool)) or v is None
+                    }
+            return sanitized
+        return {}
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -899,6 +946,77 @@ class BrowserUseController:
             status=BrowserActionStatus.OK,
             details={"response": sanitized},
             telemetry=telemetry,
+        )
+
+    def capture_review_artifacts(
+        self,
+        *,
+        output_path: Path,
+        summary_html: str | None = None,
+    ) -> ReviewArtifactCapture:
+        """Capture a stable review screenshot with a synthetic fallback."""
+
+        client = self._ensure_client()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata: Dict[str, Any] = {}
+        html_path: Path | None = None
+        try:
+            capture_fn = getattr(client, "capture_review_screenshot", None)
+            if callable(capture_fn):
+                result = capture_fn(str(output_path))
+                metadata = self._sanitize_capture_result(result)
+                method = metadata.pop("method", "browser-use") or "browser-use"
+            elif hasattr(client, "page") and hasattr(client.page, "screenshot"):
+                screenshot_fn = getattr(client.page, "screenshot")
+                screenshot_fn(path=str(output_path), full_page=False)
+                method = "playwright"
+            else:
+                raise AttributeError("capture_api_missing")
+        except Exception as exc:
+            method = "synthetic"
+            html_path = output_path.with_suffix(".html")
+            fallback_html = summary_html or (
+                "<html><body><h1>Preview unavailable</h1><p>"
+                "Unable to capture review screen; synthetic summary rendered."
+                "</p></body></html>"
+            )
+            html_path.write_text(fallback_html, encoding="utf-8")
+            output_path.write_bytes(placeholder_screenshot_bytes())
+            metadata = {"error": str(exc)}
+            log_event(
+                {
+                    "level": "warning",
+                    "event": "review.capture.synthetic",
+                    "sessionId": self.session_id,
+                    "profileId": self.config.profile_id,
+                    "path": str(output_path),
+                    "htmlPath": str(html_path),
+                    "error": str(exc),
+                }
+            )
+            return ReviewArtifactCapture(
+                screenshot_path=output_path,
+                method=method,
+                html_path=html_path,
+                metadata=metadata,
+            )
+
+        if not output_path.exists():
+            output_path.write_bytes(placeholder_screenshot_bytes())
+
+        log_event(
+            {
+                "event": "review.capture.completed",
+                "sessionId": self.session_id,
+                "profileId": self.config.profile_id,
+                "path": str(output_path),
+                "method": method,
+            }
+        )
+        return ReviewArtifactCapture(
+            screenshot_path=output_path,
+            method=method,
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------

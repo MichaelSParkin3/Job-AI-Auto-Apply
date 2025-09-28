@@ -162,6 +162,45 @@ class HistoryWriter:
             payload["summary"]["artifact"] = summary_dict.get("artifact")
         return self.append_entry(payload)
 
+    def append_preview_summary(
+        self,
+        context: RunContext,
+        *,
+        profile_id: Optional[str],
+        search_url: str,
+        summary: Mapping[str, object],
+        screenshot: Mapping[str, object],
+        dry_run: bool,
+    ) -> Path:
+        """Append a redacted preview summary entry to history."""
+
+        summary_dict = dict(summary)
+        headline = dict(summary_dict.get("headline") or {})
+        form = dict(summary_dict.get("form") or {})
+        payload: dict[str, object] = {
+            "id": context.id,
+            "profileId": profile_id or "",
+            "postingUrl": headline.get("postingUrl") or search_url,
+            "searchUrl": search_url,
+            "fingerprint": f"{context.id}:summary",
+            "status": "skipped",
+            "source": "simplyhired",
+            "runPath": str(context.run_dir),
+            "dryRun": dry_run,
+            "summary": {
+                "title": headline.get("title"),
+                "company": headline.get("company"),
+                "location": headline.get("location"),
+                "filled": form.get("filledFields"),
+                "skipped": form.get("skippedFields"),
+                "issues": form.get("issues"),
+            },
+        }
+        screenshot_payload = dict(screenshot)
+        if screenshot_payload.get("path"):
+            payload["screenshots"] = [screenshot_payload["path"]]
+        return self.append_entry(payload)
+
     def _append_jsonl(self, payload: dict[str, object]) -> None:
         serialized = json.dumps(payload, ensure_ascii=False)
         self.history_path.parent.mkdir(parents=True, exist_ok=True)
