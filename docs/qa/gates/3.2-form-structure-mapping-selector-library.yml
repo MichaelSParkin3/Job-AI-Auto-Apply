@@ -1,0 +1,51 @@
+story: '3.2'
+story_title: 'Form Structure Mapping Selector Library'
+gate: FAIL
+status_reason: 'Form mapper module raises NameError on import and pytest cannot execute due to missing Path/bs4 dependencies; no evidence that AC2/AC5 mapping heuristics or new tests function.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-10-26T00:00:00Z'
+
+top_issues:
+  - id: AC2
+    title: 'Form mapper import errors'
+    severity: BLOCKER
+    detail: 'sites/simplyhired/form_mapper.py uses json.loads and re.sub without importing json/re, so importing FormStructureMapper fails before any mapping or telemetry logic executes.'
+  - id: TEST
+    title: 'Mapper pytest missing Path import'
+    severity: MAJOR
+    detail: 'core/tests/test_form_mapper.py references Path fixtures without importing Path, causing pytest collection to abort instead of exercising synonym and fallback heuristics.'
+  - id: DEP
+    title: 'BeautifulSoup dependency absent'
+    severity: MAJOR
+    detail: 'Running pytest core/tests/test_form_mapper.py reports ModuleNotFoundError: No module named "bs4" until developers install the new beautifulsoup4 dependency introduced by this story.'
+
+waiver:
+  active: false
+
+quality_score: 38
+expires: '2025-11-02T00:00:00Z'
+
+evidence:
+  tests_reviewed: 2
+  risks_identified: 3
+  trace:
+    ac_covered: []
+    ac_gaps: [2, 5, 6]
+    notes: 'FormStructureMapper cannot be instantiated; pytest fails during collection due to missing imports and dependencies, so acceptance coverage is unavailable.'
+
+nfr_validation:
+  _assessed: [reliability, maintainability]
+  reliability:
+    status: FAIL
+    notes: 'Mapper import errors prevent any run-time execution, blocking telemetry and fallback behaviour validation.'
+  maintainability:
+    status: WARN
+    notes: 'Missing imports in both implementation and tests indicate insufficient static analysis/linters; future selector updates risk similar regressions.'
+
+recommendations:
+  immediate:
+    - 'Add missing json/re imports to sites/simplyhired/form_mapper.py and rerun targeted pytest modules.'
+    - 'Import Path in core/tests/test_form_mapper.py and confirm fixtures execute.'
+    - 'Document/install beautifulsoup4 (pip install -e .) before running pytest to unblock mapper coverage.'
+  future:
+    - 'Introduce lint/static import checks (ruff/mypy) in CI to catch missing dependency issues earlier.'
