@@ -155,7 +155,7 @@ class SessionBackupManager:
             shutil.copytree(
                 session_dir,
                 temp_dir,
-                dirs_exist_ok=False,
+                                dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns("metadata.json"),
             )
             size_bytes = _directory_size(temp_dir)

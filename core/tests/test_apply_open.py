@@ -168,7 +168,7 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     assert payload["profile"]["id"] == "frontend-dev"
     assert payload["profile"]["valid"] is True
     assert payload["profile"]["resume"]["exists"] is True
-    assert payload["profile"]["resume"]["path"].endswith("frontend-dev/resume.pdf")
+    assert payload["profile"]["resume"]["path"].endswith(os.path.join("frontend-dev", "resume.pdf"))
     assert payload["profile"]["browser"]["allowed_domains"] == [
         "*.simplyhired.com",
         "example.com",

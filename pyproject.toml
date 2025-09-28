@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "job-ai-auto-apply"
 version = "0.0.1"
 description = "Local-first CLI and preview server for job apply automation (demo)."
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "typer[all]>=0.12.5",
   "python-dotenv>=1.0.1",
