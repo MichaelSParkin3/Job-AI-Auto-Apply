@@ -400,20 +400,41 @@ class QuickApplyDiscovery:
     def _extract_candidates(self, html: str) -> List["QuickApplyDiscovery._Candidate"]:
         soup = BeautifulSoup(html, "html.parser")
         candidates: List[QuickApplyDiscovery._Candidate] = []
-        base_selector = self.selectors.job_cards[0]
+        seen_cards: set[int] = set()
 
-        for card in soup.select(base_selector):
-            if not self._has_quick_apply_marker(card):
-                continue
-            url = self._extract_link(card)
-            job_key, attr = self._extract_job_key(card, url=url)
-            if not job_key:
-                continue
-            selector = base_selector
-            if attr:
-                selector = f"{base_selector}[{attr}='{job_key}']"
-            title = self._extract_title(card)
-            candidates.append(self._Candidate(job_key=job_key, title=title, url=url, selector=selector))
+        for card_selector in self.selectors.job_cards:
+            for card in soup.select(card_selector):
+                identifier = id(card)
+                if identifier in seen_cards:
+                    continue
+                seen_cards.add(identifier)
+
+                if not self._has_quick_apply_marker(card):
+                    continue
+
+                url = self._extract_link(card)
+                job_key, attr = self._extract_job_key(card, url=url)
+                if not job_key:
+                    continue
+
+                selector = card_selector
+                if attr:
+                    sanitized_key = (
+                        str(job_key)
+                        .replace("\\", "\\\\")
+                        .replace('"', '\\"')
+                    )
+                    selector = f"{card_selector}[{attr}=\"{sanitized_key}\"]"
+
+                title = self._extract_title(card)
+                candidates.append(
+                    self._Candidate(
+                        job_key=job_key,
+                        title=title,
+                        url=url,
+                        selector=selector,
+                    )
+                )
         return candidates
 
     def _has_quick_apply_marker(self, card: Any) -> bool:
