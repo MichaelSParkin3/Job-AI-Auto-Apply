@@ -32,6 +32,22 @@
         "section.DetailPane[data-active=true] iframe",
         "section.DetailPane h2"
       ]
+    },
+    {
+      "id": "serp-2025-data-testid",
+      "description": "2025 data-testid layout observed in current runs",
+      "jobCardSelectors": [
+        "div[data-testid=searchSerpJob]",
+        "li[data-testid=searchSerpJob]"
+      ],
+      "detailSelectors": [
+        "a[data-testid=viewJobHeaderFooterApplyButton]",
+        "button[data-testid=viewJobHeaderFooterApplyButton]"
+      ],
+      "titleSelectors": [
+        "a[data-testid=searchSerpJobTitle]",
+        "[data-testid=searchSerpJobTitle]"
+      ]
     }
   ]
 }

@@ -12,6 +12,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+# Files/directories that are safe to skip in backups to avoid permission errors
+BACKUP_IGNORE_PATTERNS = (
+    "metadata.json",
+    # Chrome caches (often locked while browser runs)
+    "Cache_Data*",
+    "Code Cache*",
+    "DawnCache*",
+    "GPUCache*",
+    "ShaderCache*",
+    "GrShaderCache*",
+    "Service Worker*",
+    "VideoDecodeStats*",
+    # Locks
+    "lockfile",
+    "SingletonLock",
+)
+
 from apps.cli.utils import log_event
 
 
@@ -155,8 +172,8 @@ class SessionBackupManager:
             shutil.copytree(
                 session_dir,
                 temp_dir,
-                                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns("metadata.json"),
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(*BACKUP_IGNORE_PATTERNS),
             )
             size_bytes = _directory_size(temp_dir)
             metadata = {

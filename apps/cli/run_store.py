@@ -309,6 +309,17 @@ class RunStore:
         self._write_run_json(record.run_json_path, data)
         return data
 
+    def record_quick_apply_discovery(
+        self, record: RunRecord, discovery_payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Persist Quick Apply discovery results for the given run."""
+
+        data = self._load_run_json(record.run_json_path)
+        data["discovery"] = discovery_payload
+        data["status"] = "quick_apply_discovery"
+        self._write_run_json(record.run_json_path, data)
+        return data
+
     def load_run_payload(self, record: RunRecord) -> Dict[str, Any]:
         """Return the current run.json payload for the given record."""
 

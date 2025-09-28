@@ -24,14 +24,14 @@
 - NFR1: Privacy — All PII and artifacts remain local; no cloud storage of user data.
 - NFR2: Performance — Median Review-mode submit ≤ 120s; preview decision ≤ 10s.
 - NFR3: Reliability — ≥ 95% submit success in Review mode; auto-retry once on failure.
-- NFR4: Stealth — Headful Chrome, human-like pacing, stable viewport/timezone/locale, one-tab flow, persistent sessions.
+- NFR4: Stealth — Headful Chrome, human-like pacing, stable viewport/timezone/locale, one-tab flow, persistent sessions. Locale/timezone are applied via environment (`LANG`/`LC_ALL`/`TZ`), `Accept-Language`, and `--lang` to align with Browser‑Use 0.7.x.
 - NFR5: Security — Redact PII in step logs; store full PII only in `run.json`; secrets in `.env.local`; respect site ToS; restrict domains.
 - NFR6: Usability — Profile switch ≤ 2s; ≤ 1 manual correction per application; minimal yet clear preview UI.
 - NFR7: Compatibility — Windows 10/11, Chrome stable, Python 3.11+, Playwright Chromium installed.
 - NFR8: Observability — Artifacts for 100% of runs; `history.jsonl` append latency ≤ 1s; error taxonomy captured.
 - NFR9: Maintainability — File-first storage contracts; modular site playbooks; dry-run supports local testing.
 - NFR10: Scalability — Support configurable `--limit`; retention policies and threshold warnings for storage growth.
-- NFR11: Resilience — Session backup/restore; recreate on corruption; model override and backoff when default unavailable.
+- NFR11: Resilience — Session backup/restore; recreate on corruption; backups skip Chrome cache/lock files to avoid permission errors; model override and backoff when default unavailable.
 - NFR12: Compliance — No CAPTCHA bypass; stays within SimplyHired “Quick Apply”; do not follow off-site flows.
 
 ### Rationale (Requirements)

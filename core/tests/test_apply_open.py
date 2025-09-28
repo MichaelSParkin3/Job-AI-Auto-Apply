@@ -1,9 +1,15 @@
 import json
+import json
 import os
 import sys
 from pathlib import Path
 
-from typer.testing import CliRunner
+import pytest
+
+try:  # pragma: no cover - optional dependency guard
+    from typer.testing import CliRunner
+except ModuleNotFoundError:  # pragma: no cover - executed only when typer missing
+    pytest.skip("typer not installed", allow_module_level=True)
 
 sys.path.insert(0, os.getcwd())
 from apps.browser import BrowserLaunchError, SessionBackupManager
@@ -17,6 +23,12 @@ SELECTOR_SOURCE = (
     PROJECT_ROOT / "sites" / "simplyhired" / "selectors" / "search-readiness.json"
 )
 FIXTURES_DIR = PROJECT_ROOT / "core" / "tests" / "fixtures" / "simplyhired" / "search"
+QUICK_APPLY_SELECTOR_SOURCE = (
+    PROJECT_ROOT / "sites" / "simplyhired" / "selectors" / "quick-apply.json"
+)
+QUICK_APPLY_FIXTURES_DIR = (
+    PROJECT_ROOT / "core" / "tests" / "fixtures" / "simplyhired" / "quick_apply"
+)
 
 
 def _parse_last_json(output: str) -> dict:
@@ -41,6 +53,20 @@ def _prepare_search_selectors(base: Path) -> Path:
 
 def _load_fixture(name: str) -> str:
     return (FIXTURES_DIR / name).read_text(encoding="utf-8")
+
+
+def _prepare_quick_apply_selectors(base: Path) -> Path:
+    target = base / "sites" / "simplyhired" / "selectors"
+    target.mkdir(parents=True, exist_ok=True)
+    destination = target / "quick-apply.json"
+    destination.write_text(
+        QUICK_APPLY_SELECTOR_SOURCE.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return destination
+
+
+def _load_quick_apply_fixture(name: str) -> str:
+    return (QUICK_APPLY_FIXTURES_DIR / name).read_text(encoding="utf-8")
 
 
 def _bootstrap_profile(
@@ -108,6 +134,7 @@ class RecordingClient:
         self._snapshot_index = 0
         self._idle_failures = set(idle_failures or set())
         self.wait_for_idle_calls = 0
+        self.safe_click_calls: list[tuple[str, float | None]] = []
 
     def open_url(self, url: str) -> dict[str, str]:
         self.open_calls.append(url)
@@ -127,12 +154,14 @@ class RecordingClient:
         return html
 
     def safe_click(self, selector: str, timeout: float | None = None) -> dict[str, str | float | None]:
+        self.safe_click_calls.append((selector, timeout))
         return {"selector": selector, "timeout": timeout}
 
 
 def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
+    _prepare_quick_apply_selectors(tmp_path)
     _bootstrap_profile(tmp_path)
 
     captured_config: dict[str, object] = {}
@@ -183,9 +212,20 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     assert Path(readiness["artifacts"]["html"][-1]).exists()
     assert payload["telemetry"]["searchReadiness"]["status"] == "ready"
 
+    assert payload["limit"] == 2
+    discovery = payload["discovery"]
+    assert discovery["summary"]["processedCount"] == 0
+    assert discovery["summary"]["openedCount"] == 0
+    assert discovery["summary"]["limitRequested"] == 2
+    assert discovery["summary"]["limitRemaining"] == 2
+    assert discovery["selectors"]["base"].endswith("quick-apply.json")
+    assert payload["telemetry"]["quickApplyDiscovery"]["processed"] == 0
+    assert payload["telemetry"]["quickApplyDiscovery"]["opened"] == 0
+
     run_dir = Path(payload["run"]["artifactsDir"])
     run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-    assert run_json["status"] == "search_ready"
+    assert run_json["status"] == "quick_apply_discovery"
+    assert run_json["discovery"]["summary"]["processedCount"] == 0
     backups = payload["backups"]
     assert backups["enabled"] is True
     assert backups["retention"] == 2
@@ -228,8 +268,106 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     assert payload_override["readiness"]["status"] == "ready"
 
 
+def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    _prepare_search_selectors(tmp_path)
+    _prepare_quick_apply_selectors(tmp_path)
+    _bootstrap_profile(tmp_path)
+
+    snapshots = [
+        _load_fixture("baseline.html"),
+        _load_quick_apply_fixture("page-list-1.html"),
+        _load_quick_apply_fixture("detail-modal-job-1.html"),
+        _load_quick_apply_fixture("detail-missing-job-2.html"),
+        _load_quick_apply_fixture("page-list-2.html"),
+        _load_quick_apply_fixture("detail-inline-job-3.html"),
+    ]
+
+    captured: dict[str, RecordingClient] = {}
+
+    def factory(config):
+        client = RecordingClient(snapshots=snapshots)
+        captured["client"] = client
+        return client
+
+    monkeypatch.setattr("apps.browser.controller.create_browser_client", factory)
+    monkeypatch.setattr("apps.cli.main.time.sleep", lambda *_args, **_kwargs: None)
+
+    runner.invoke(app, ["profiles", "use", "frontend-dev"], color=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "apply",
+            "open",
+            "https://simplyhired.com/search?q=qa",
+            "--limit",
+            "2",
+        ],
+        color=False,
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = _parse_last_json(result.stdout)
+
+    discovery = payload["discovery"]
+    summary = discovery["summary"]
+    assert summary["processedCount"] == 3
+    assert summary["openedCount"] == 2
+    assert summary["missingCount"] == 1
+    assert summary["duplicateCount"] == 1
+    assert summary["limitRequested"] == 2
+    assert summary["limitRemaining"] == 0
+    assert summary["limitReached"] is True
+    assert summary["pagesVisited"] == 2
+    assert summary["paginationEvents"] == ["PAGINATED_NEXT"]
+
+    candidates = discovery["candidates"]
+    assert [candidate["status"] for candidate in candidates] == [
+        "opened",
+        "missing",
+        "opened",
+    ]
+    assert candidates[0]["mode"] == "modal"
+    assert candidates[1].get("mode") is None
+    assert candidates[2]["mode"] == "inline"
+
+    artifacts = discovery["artifacts"]
+    assert len(artifacts) == 3
+    for artifact in artifacts:
+        assert Path(artifact).exists()
+
+    telemetry = payload["telemetry"]["quickApplyDiscovery"]
+    assert telemetry["opened"] == 2
+    assert telemetry["missing"] == 1
+    assert telemetry["duplicates"] == 1
+    assert telemetry["limitRemaining"] == 0
+
+    client = captured["client"]
+    selectors_clicked = [call[0] for call in client.safe_click_calls]
+    assert len(selectors_clicked) >= 6
+    assert any(
+        selector.startswith("div[data-testid=searchSerpJob]")
+        for selector in selectors_clicked
+    )
+    assert any(
+        selector.startswith("li[data-testid=searchSerpJob]")
+        for selector in selectors_clicked
+    )
+    assert any("pagination-next" in selector for selector in selectors_clicked)
+    assert client.wait_for_idle_calls >= 5
+
+    run_dir = Path(payload["run"]["artifactsDir"])
+    discovery_dir = run_dir / "quick-apply"
+    assert discovery_dir.exists()
+
+    run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert run_json["discovery"]["summary"]["openedCount"] == 2
+
+
 def test_apply_open_blocks_when_resume_missing(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    _prepare_search_selectors(tmp_path)
+    _prepare_quick_apply_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
     resume_path = tmp_path / "data" / "resumes" / "frontend-dev" / "resume.pdf"
     resume_path.unlink()
@@ -262,6 +400,7 @@ def test_apply_open_blocks_when_resume_missing(tmp_path: Path, monkeypatch):
 def test_apply_open_readiness_failure_records_artifacts(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
+    _prepare_quick_apply_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
 
     spinner_html = _load_fixture("spinner.html")
@@ -302,6 +441,7 @@ def test_apply_open_readiness_failure_records_artifacts(tmp_path: Path, monkeypa
 def test_apply_open_switch_profiles_isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
+    _prepare_quick_apply_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
     _bootstrap_profile(
         tmp_path,
@@ -377,6 +517,7 @@ def test_apply_open_switch_profiles_isolated(tmp_path: Path, monkeypatch):
 def test_apply_open_restores_session_on_launch_error(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
+    _prepare_quick_apply_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
 
     session_dir = tmp_path / ".local" / "browser" / "profiles" / "frontend-dev"
@@ -423,6 +564,7 @@ def test_apply_open_restores_session_on_launch_error(tmp_path: Path, monkeypatch
 def test_apply_open_backup_disabled_skips(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
+    _prepare_quick_apply_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
 
     baseline_html = _load_fixture("baseline.html")

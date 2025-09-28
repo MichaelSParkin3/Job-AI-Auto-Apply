@@ -2,7 +2,16 @@
 
 Local-first, review-first automation for job applications. This repo now ships the end-to-end dry-run demo experience: a Typer CLI that boots a FastAPI preview service, serves a React UI, and lets you approve/decline edits before anything is submitted.
 
-Status: Story 1.5 (Dry-run demo flow) implemented.
+Status: Story 3.1.5 (Browser‑Use 0.7.x migration) implemented.
+
+## What’s New in 3.1.5
+- Upgraded to Browser‑Use 0.7.x with an adapter that waits for BrowserConnectedEvent/agent focus and exposes sync primitives (`open_url`, `wait_for_idle`, `safe_click`, `get_page_html`).
+- Added CDP `Page.navigate` fallback to avoid "stuck on Google/new tab" during first navigation.
+- Applied locale/timezone via environment (`LANG`/`LC_ALL`/`TZ`), `Accept-Language`, and `--lang` (no deprecated kwargs).
+- Updated SimplyHired readiness selectors with a 2025 `data-testid` variant; discovery detects inline vs modal Quick Apply after card click.
+- Session backups: live runs default to backups disabled unless explicitly enabled; when enabled, cache/lock files are skipped.
+- Windows console output set to UTF‑8 to avoid emoji logging crashes; you can also export `PYTHONIOENCODING=utf-8`.
+- Docs: architecture and PRD updated; README includes a “Browser‑Use 0.7.x Notes” section plus upstream links.
 
 ## Why
 - Privacy by default: runs on your machine; artifacts stored locally
@@ -89,6 +98,14 @@ Running `python app.py apply demo --dry-run --limit 1` creates a run folder simi
 ```json
 {"fingerprint":"20240926-120000-abcdef12","id":"20240926-120000-abcdef12","postingUrl":"demo://placeholder","profileId":"","runPath":"runs/20240926-120000-abcdef12","status":"demo","summary":"Demo run initialized; actions.log will contain redacted events.","timestamp":"2024-09-26T12:00:00Z"}
 ```
+
+## Browser‑Use 0.7.x Notes
+- Event‑driven lifecycle: we adapt Browser‑Use’s async `BrowserSession` to synchronous CLI primitives. On launch we wait for `BrowserConnectedEvent`/focus; if the browser opens on `chrome://newtab` or Google, we issue a CDP `Page.navigate` fallback to your target URL.
+- Locale/timezone: now applied via env (`LANG`/`LC_ALL`/`TZ`), `Accept-Language`, and Chrome `--lang`. Deprecated `locale`/`timezone_id` kwargs are not used.
+- Readiness selectors: SimplyHired SERP support includes a 2025 variant using `data-testid` to match current markup.
+- Session backups: live runs default to backups disabled (override with `--session-backups`); when enabled, cache/lock files are skipped to avoid permissions noise.
+- Windows console UTF‑8: the CLI configures stdout/stderr for UTF‑8 to avoid emoji logging crashes; you can also set `PYTHONIOENCODING=utf-8`.
+- Docs: see https://docs.browser-use.com/introduction and https://docs.browser-use.com/changelog for upstream updates.
 
 ### Environment Variables
 Create `.env.local` at repo root (optional):

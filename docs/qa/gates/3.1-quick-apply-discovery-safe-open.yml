@@ -1,0 +1,36 @@
+story: '3.1'
+story_title: 'Quick Apply Discovery Safe Open'
+gate: PASS
+status_reason: 'Discovery retest confirms all configured job card selectors participate in iteration, duplicate job keys register telemetry without blocking variants, and full pytest suite (33 tests) executes with Typer and supporting deps installed.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-10-26T00:00:00Z'
+
+top_issues: []
+
+waiver:
+  active: false
+
+quality_score: 92
+expires: '2025-11-26T00:00:00Z'
+
+evidence:
+  tests_reviewed: 33
+  risks_identified: 0
+  trace:
+    ac_covered: [1, 2, 3, 4, 5, 6, 7]
+    ac_gaps: []
+    notes: 'Executed pytest after installing declared dependencies, reviewing `core/tests/test_apply_open.py` fixture coverage for div/li list layouts, pagination, duplicates, telemetry payload, and artifact persistence while inspecting `QuickApplyDiscovery._extract_candidates` iteration behaviour.'
+
+nfr_validation:
+  _assessed: [reliability, maintainability]
+  reliability:
+    status: PASS
+    notes: 'Deduped multi-selector iteration keeps discovery aligned across SimplyHired templates and pagination events surface reliably in telemetry.'
+  maintainability:
+    status: PASS
+    notes: 'Selector assets load from config and per-run overrides; iteration honours all configured selectors, allowing future tweaks without code edits.'
+
+recommendations:
+  immediate: []
+  future:
+    - 'Consider adding negative coverage for cards missing quick-apply markers to lock in skip telemetry expectations.'
