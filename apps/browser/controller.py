@@ -5,12 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import hashlib
 import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, Protocol, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+)
 
 from apps.cli.utils import log_event
 from .guardrails import NavigationGuardrails
@@ -96,6 +106,9 @@ class BrowserClient(Protocol):
     def get_field_state(self, selector: str, widget_type: str) -> Any:  # pragma: no cover
         """Return the current value/checked state for validation."""
 
+    def set_input_files(self, selector: str, paths: Sequence[str]) -> Any:  # pragma: no cover
+        """Attach files to an <input type="file"> element."""
+
 
 ClientFactory = Callable[[BrowserLaunchConfig], BrowserClient]
 
@@ -164,6 +177,10 @@ class BrowserSessionAdapter:
 
     def get_field_state(self, selector: str, widget_type: str) -> Dict[str, Any]:
         result = self._run(self._get_field_state(selector, widget_type))
+        return {"selector": selector, "result": result}
+
+    def set_input_files(self, selector: str, paths: Sequence[str]) -> Dict[str, Any]:
+        result = self._run(self._set_input_files(selector, paths))
         return {"selector": selector, "result": result}
 
     def close(self) -> None:
@@ -477,10 +494,36 @@ class BrowserSessionAdapter:
             "  if (widget === 'checkbox') {\n"
             "    return { ok: true, checked: Boolean(element.checked) };\n"
             "  }\n"
+            "  if (widget === 'file') {\n"
+            "    const files = Array.from(element.files || []).map(file => ({\n"
+            "      name: file.name,\n"
+            "      size: typeof file.size === 'number' ? file.size : null,\n"
+            "      type: file.type || null\n"
+            "    }));\n"
+            "    return { ok: true, files, count: files.length };\n"
+            "  }\n"
             "  return { ok: false, reason: 'unsupported_widget' };\n"
             "})()"
         )
         return await self._evaluate_js(expression)
+
+    async def _set_input_files(self, selector: str, paths: Sequence[str]) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        page = getattr(self._session, "page", None)
+        if page is None:
+            raise RuntimeError("Browser session is not exposing a Playwright page")
+        if not hasattr(page, "set_input_files"):
+            raise RuntimeError("Playwright page does not support set_input_files")
+        normalized = [str(Path(path)) for path in paths]
+        await page.set_input_files(selector, normalized)
+        files = [
+            {
+                "name": Path(path).name,
+                "path": str(Path(path)),
+            }
+            for path in normalized
+        ]
+        return {"ok": True, "files": files}
 
     async def _get_outer_html(self) -> str:
         await self._ensure_focus_ready()
@@ -629,12 +672,48 @@ class BrowserUseController:
                         sanitized["optionsCount"] = len(value)
                     else:
                         sanitized["options"] = value
+                elif key == "files":
+                    if isinstance(value, Sequence):
+                        sanitized["fileCount"] = len(value)
+                        sanitized["files"] = [
+                            {
+                                "name": str(item.get("name")) if isinstance(item, Mapping) else str(item),
+                                "size": item.get("size") if isinstance(item, Mapping) else None,
+                            }
+                            for item in value
+                        ]
+                    else:
+                        sanitized["files"] = value
                 else:
                     sanitized[key] = value
             if original is not None:
                 sanitized.setdefault("valueLength", len(original))
             return sanitized
         return {"ok": bool(data)}
+
+    @staticmethod
+    def _describe_file(path: Path) -> Dict[str, Any]:
+        info: Dict[str, Any] = {
+            "name": path.name,
+            "exists": path.exists(),
+        }
+        try:
+            info["sizeBytes"] = path.stat().st_size
+        except OSError:
+            info["sizeBytes"] = None
+        if info["exists"]:
+            digest = hashlib.sha256()
+            try:
+                with path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(8192), b""):
+                        digest.update(chunk)
+            except OSError:
+                info["sha256"] = None
+            else:
+                info["sha256"] = digest.hexdigest()
+        else:
+            info["sha256"] = None
+        return info
 
     # ------------------------------------------------------------------
     # Public API
@@ -755,6 +834,71 @@ class BrowserUseController:
             status=BrowserActionStatus.OK,
             details={"html": html},
             telemetry=payload,
+        )
+
+    def upload_file(
+        self,
+        selector: str,
+        file_path: Path,
+        *,
+        dry_run: bool = False,
+        timeout: float | None = None,
+        think_time: bool = True,
+    ) -> BrowserActionResult:
+        """Deterministically attach a file to an input element."""
+
+        client = self._ensure_client()
+        resolved = file_path.resolve()
+        file_info = self._describe_file(resolved)
+        payload = self._base_payload() | {
+            "selector": selector,
+            "timeout": timeout,
+            "file": file_info,
+            "dryRun": dry_run,
+        }
+        if think_time:
+            self._guardrails.think_time(payload, reason="pre_upload")
+        start = time.monotonic()
+        log_event(payload | {"event": "UPLOAD_STARTED"})
+        if dry_run:
+            telemetry = payload | {
+                "event": "UPLOAD_COMPLETED",
+                "simulated": True,
+                "durationSeconds": 0.0,
+            }
+            log_event(telemetry)
+            return BrowserActionResult(
+                status=BrowserActionStatus.OK,
+                details={"response": {"simulated": True, "file": file_info}},
+                telemetry=telemetry,
+            )
+        try:
+            result = client.set_input_files(selector, [str(resolved)])
+        except Exception as exc:  # pragma: no cover - defensive
+            failure_event = payload | {
+                "event": "UPLOAD_FAILED",
+                "error": str(exc),
+            }
+            log_event(failure_event | {"level": "error"})
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=failure_event,
+            )
+
+        duration = round(time.monotonic() - start, 3)
+        telemetry = payload | {
+            "event": "UPLOAD_COMPLETED",
+            "durationSeconds": duration,
+        }
+        log_event(telemetry)
+        sanitized = self._sanitize_widget_result(result)
+        sanitized.setdefault("durationSeconds", duration)
+        sanitized.setdefault("file", file_info)
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"response": sanitized},
+            telemetry=telemetry,
         )
 
     # ------------------------------------------------------------------

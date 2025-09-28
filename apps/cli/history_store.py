@@ -123,6 +123,45 @@ class HistoryWriter:
         }
         return self.append_entry(payload)
 
+    def append_resume_upload(
+        self,
+        context: RunContext,
+        *,
+        profile_id: Optional[str],
+        search_url: str,
+        summary: Mapping[str, object],
+        dry_run: bool,
+    ) -> Path:
+        """Append a resume upload history record."""
+
+        summary_dict = dict(summary)
+        payload: dict[str, object] = {
+            "id": context.id,
+            "profileId": profile_id or "",
+            "postingUrl": "simplyhired://resume-upload",
+            "searchUrl": search_url,
+            "fingerprint": f"{context.id}:resume-upload",
+            "status": "skipped",
+            "source": "simplyhired",
+            "runPath": str(context.run_dir),
+            "dryRun": dry_run,
+            "summary": {
+                "status": summary_dict.get("status"),
+                "attempts": summary_dict.get("attempts"),
+                "simulated": summary_dict.get("simulated"),
+            },
+        }
+        file_info = summary_dict.get("file")
+        if isinstance(file_info, Mapping):
+            payload["summary"]["file"] = {
+                "name": file_info.get("name"),
+                "sha256": file_info.get("sha256"),
+                "sizeBytes": file_info.get("sizeBytes"),
+            }
+        if summary_dict.get("artifact"):
+            payload["summary"]["artifact"] = summary_dict.get("artifact")
+        return self.append_entry(payload)
+
     def _append_jsonl(self, payload: dict[str, object]) -> None:
         serialized = json.dumps(payload, ensure_ascii=False)
         self.history_path.parent.mkdir(parents=True, exist_ok=True)

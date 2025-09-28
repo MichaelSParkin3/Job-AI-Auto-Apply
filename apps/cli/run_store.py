@@ -340,6 +340,16 @@ class RunStore:
         self._write_run_json(record.run_json_path, data)
         return data
 
+    def record_resume_upload(
+        self, record: RunRecord, resume_payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Persist the resume upload result to run.json."""
+
+        data = self._load_run_json(record.run_json_path)
+        data["resumeUpload"] = resume_payload
+        self._write_run_json(record.run_json_path, data)
+        return data
+
     def load_run_payload(self, record: RunRecord) -> Dict[str, Any]:
         """Return the current run.json payload for the given record."""
 
