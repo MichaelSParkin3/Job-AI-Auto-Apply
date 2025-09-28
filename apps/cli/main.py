@@ -21,7 +21,8 @@ from apps.browser import (
     SessionBackupManager,
 )
 from apps.preview.runner import run_preview_service
-from sites.simplyhired.form_mapper import FormSelectorLibrary, FormStructureMapper
+from sites.simplyhired.form_mapper import FormFillPlan, FormSelectorLibrary, FormStructureMapper
+from sites.simplyhired.form_filler import FormFillExecutor
 from sites.simplyhired.quick_apply_discovery import QuickApplyDiscovery
 from sites.simplyhired.search_readiness import SearchReadinessDetector
 from .config_loader import (
@@ -31,7 +32,7 @@ from .config_loader import (
     write_default_config,
 )
 from .history_store import HistoryWriter
-from .profiles import ProfileBinding, ProfileService
+from .profiles import ProfileAnswerResolver, ProfileBinding, ProfileService
 from .run_store import RunStore
 from .runtime_state import get_run_context, set_run_context
 from .utils import ApiError, log_event
@@ -246,6 +247,12 @@ def apply_open(
         except ApiError as error:
             typer.secho(error.to_json(), fg=typer.colors.RED)
             raise typer.Exit(code=1)
+
+    profile_config = None
+    try:
+        profile_config = service.load_profile(profile_id)
+    except (FileNotFoundError, ValueError):
+        profile_config = None
 
     browser_overrides: dict[str, Any] = dict(binding.browser_overrides)
     user_data_dir = binding.user_data_dir
@@ -917,6 +924,7 @@ def apply_open(
             raise typer.Exit(code=1) from exc
 
         form_plan_artifacts: list[dict[str, Any]] = []
+        generated_plans: list[tuple[FormFillPlan, str]] = []
         total_steps = 0
         total_mapped = 0
         total_unmapped = 0
@@ -936,6 +944,7 @@ def apply_open(
             html = artifact.read_text(encoding="utf-8")
             mapper = FormStructureMapper(html, selector_library)
             plan = mapper.generate_plan()
+            generated_plans.append((plan, artifact_path))
             plan_payload = plan.to_payload()
             plan_payload["artifact"] = artifact_path
             form_plan_artifacts.append(plan_payload)
@@ -987,7 +996,8 @@ def apply_open(
         payload["telemetry"]["formMapping"] = form_plan_summary | {
             "browserUseVersion": browser_use_version,
         }
-        store.record_form_plan(readiness_record, form_plan_payload)
+        if readiness_record:
+            store.record_form_plan(readiness_record, form_plan_payload)
 
         history_writer = HistoryWriter(base=base)
         context = get_run_context()
@@ -999,6 +1009,43 @@ def apply_open(
                 summary=form_plan_summary,
                 dry_run=dry_run,
             )
+
+        form_fill_payload: dict[str, Any] | None = None
+        fill_result = None
+        if generated_plans:
+            resolver = ProfileAnswerResolver(profile=profile_config, binding=binding)
+            executor = FormFillExecutor(controller, resolver, max_retries=1)
+            plan_to_fill, plan_artifact = generated_plans[-1]
+            fill_result = executor.execute(plan_to_fill, artifact=plan_artifact)
+            form_fill_payload = {
+                "artifacts": [fill_result.to_payload()],
+                "summary": {
+                    "artifacts": 1,
+                    "filledFields": fill_result.filled_count(),
+                    "skippedFields": fill_result.skipped_count(),
+                    "issues": fill_result.issue_count(),
+                },
+            }
+            payload["formFill"] = form_fill_payload
+            telemetry_summary = form_fill_payload["summary"]
+            payload["telemetry"]["formFill"] = telemetry_summary
+            if readiness_record:
+                store.record_form_fill(readiness_record, form_fill_payload)
+            if fill_result.steps:
+                typer.echo("\nForm fill summary:")
+                typer.echo(f"{'Step':<28}{'Filled':>8}{'Skipped':>10}{'Issues':>8}")
+                for step_result in fill_result.steps:
+                    typer.echo(
+                        f"{step_result.title[:28]:<28}{len(step_result.filled):>8}{len(step_result.skipped):>10}{len(step_result.issues):>8}"
+                    )
+            if context:
+                history_writer.append_form_fill(
+                    context,
+                    profile_id=profile_id,
+                    search_url=search_url,
+                    summary=telemetry_summary,
+                    dry_run=dry_run,
+                )
 
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     except (FileNotFoundError, ValueError) as exc:

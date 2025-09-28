@@ -2,7 +2,18 @@
 
 Local-first, review-first automation for job applications. This repo now ships the end-to-end dry-run demo experience: a Typer CLI that boots a FastAPI preview service, serves a React UI, and lets you approve/decline edits before anything is submitted.
 
-Status: Story 3.1.5 (Browser‑Use 0.7.x migration) implemented.
+Status: Story 3.3 (Profile-driven filling & validation) implemented.
+
+## What’s New in 3.3
+- `python app.py apply open` now replays the persisted SimplyHired `FormFillPlan` instead of re-scraping HTML. The new
+  `FormFillExecutor` drives Browser-Use via high-level primitives (`fill_text`, `set_select_value`, `set_radio_value`,
+  `set_checkbox_state`, `focus`) and emits `FIELD_*` telemetry for every attempt.
+- `ProfileAnswerResolver` normalises profile answers (trimmed strings, lower-cased email, E.164-style phone output,
+  override fallbacks) and generates masked previews so CLI logs and artifacts never leak raw PII.
+- Run persistence adds a `formFill` payload to `run.json` and `history.jsonl`, summarising filled/skipped/issue counts per
+  step. The CLI prints a per-step table for quick inspection during dry runs and records validation warnings for empty
+  required fields.
+
 
 ## What’s New in 3.1.5
 - Upgraded to Browser‑Use 0.7.x with an adapter that waits for BrowserConnectedEvent/agent focus and exposes sync primitives (`open_url`, `wait_for_idle`, `safe_click`, `get_page_html`).
@@ -158,6 +169,18 @@ After the search readiness check succeeds the CLI now snapshots the resolved ses
 - **Domain allowlist** – navigation is limited to the configured domains (`browser.allowed_domains`). Profile YAML can append additional domains per-identity.
 - **Single-tab enforcement** – attempts to spawn a new tab/window are blocked and logged as `guardrail.browser.NEW_TAB_ATTEMPT` events.
 - **Human pacing defaults** – each action injects jittered waits (100–600 ms) and optional think-time ranges (1–2 s) before critical interactions. Tweak via `browser.pacing.wait_jitter_ms` and `browser.pacing.think_time_range_s` in `config/config.yaml`, CLI overrides (`--browser.allowed_domains`, `--browser.pacing.*`), or profile overrides.
+
+#### Form Fill Execution (Story 3.3)
+- After discovery produces a `FormFillPlan`, the CLI resolves answers through `ProfileAnswerResolver`, which merges profile YAML
+  fields, QA overrides, and derived values (e.g., formatted phone, LinkedIn URL). Missing data results in `FIELD_SKIPPED`
+  telemetry with structured reasons instead of placeholder text.
+- `FormFillExecutor` issues high-level controller actions (`focus`, `fill_text`, `set_select_value`, `set_radio_value`,
+  `set_checkbox_state`) with guardrail pacing and a single retry for transient failures. Every attempt emits redacted
+  `FIELD_FILL_STARTED`, `FIELD_FILLED`, `FIELD_SKIPPED`, and `FIELD_RETRY` events.
+- Required widgets are validated post-fill via `get_field_state`; empty inputs log `FIELD_VALIDATION_FAILED` warnings and are
+  surfaced in the CLI summary table.
+- Completed runs persist a `formFill` payload alongside discovery/mapping artifacts in `runs/<id>/run.json` and append a
+  matching history entry so review tooling can track filled vs skipped counts over time.
 - **Structured telemetry** – navigation, tab suppression, pacing waits, and think-time pauses stream through the `log_event` pipeline so `actions.log` and downstream tooling can observe guardrail posture.
 
 ### Tests

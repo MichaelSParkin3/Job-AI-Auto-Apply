@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, Protocol, Sequence
 
 from apps.cli.utils import log_event
 from .guardrails import NavigationGuardrails
@@ -78,6 +78,24 @@ class BrowserClient(Protocol):
     def get_page_content(self) -> str:  # pragma: no cover - runtime protocol
         """Return the current page HTML content."""
 
+    def focus(self, selector: str, timeout: float | None = None) -> Any:  # pragma: no cover
+        """Set focus on the provided selector."""
+
+    def fill_text(self, selector: str, value: str, *, clear: bool = True) -> Any:  # pragma: no cover
+        """Assign text value to an input/textarea selector."""
+
+    def set_select_value(self, selector: str, value: str) -> Any:  # pragma: no cover
+        """Set a <select> element to the given value."""
+
+    def set_radio_value(self, selector: str, value: str) -> Any:  # pragma: no cover
+        """Mark the radio group containing selector as checked for the given value."""
+
+    def set_checkbox_state(self, selector: str, checked: bool) -> Any:  # pragma: no cover
+        """Toggle a checkbox input state."""
+
+    def get_field_state(self, selector: str, widget_type: str) -> Any:  # pragma: no cover
+        """Return the current value/checked state for validation."""
+
 
 ClientFactory = Callable[[BrowserLaunchConfig], BrowserClient]
 
@@ -121,6 +139,32 @@ class BrowserSessionAdapter:
 
     def get_page_content(self) -> str:
         return self._run(self._get_outer_html())
+
+    def focus(self, selector: str, timeout: float | None = None) -> Dict[str, Any]:
+        result = self._run(self._focus_selector(selector, timeout))
+        return {"selector": selector, "result": result}
+
+    def fill_text(
+        self, selector: str, value: str, *, clear: bool = True
+    ) -> Dict[str, Any]:
+        result = self._run(self._fill_text(selector, value, clear=clear))
+        return {"selector": selector, "result": result}
+
+    def set_select_value(self, selector: str, value: str) -> Dict[str, Any]:
+        result = self._run(self._set_select_value(selector, value))
+        return {"selector": selector, "result": result}
+
+    def set_radio_value(self, selector: str, value: str) -> Dict[str, Any]:
+        result = self._run(self._set_radio_value(selector, value))
+        return {"selector": selector, "result": result}
+
+    def set_checkbox_state(self, selector: str, checked: bool) -> Dict[str, Any]:
+        result = self._run(self._set_checkbox_state(selector, checked))
+        return {"selector": selector, "result": result}
+
+    def get_field_state(self, selector: str, widget_type: str) -> Dict[str, Any]:
+        result = self._run(self._get_field_state(selector, widget_type))
+        return {"selector": selector, "result": result}
 
     def close(self) -> None:
         if self._closed:
@@ -273,6 +317,171 @@ class BrowserSessionAdapter:
                 raise RuntimeError(f"Failed to click selector {selector}: {last_error}")
             await asyncio.sleep(0.25)
 
+    async def _focus_selector(self, selector: str, timeout: float | None) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        deadline = time.monotonic() + (timeout if timeout is not None else 5.0)
+        last_error: Dict[str, Any] | None = None
+        while True:
+            expression = (
+                "(() => {\n"
+                f"  const selector = {json.dumps(selector)};\n"
+                "  const element = document.querySelector(selector);\n"
+                "  if (!element) { return { ok: false, reason: 'not_found' }; }\n"
+                "  try {\n"
+                "    element.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });\n"
+                "    if (typeof element.focus === 'function') { element.focus({ preventScroll: true }); }\n"
+                "    return { ok: true, tagName: element.tagName };\n"
+                "  } catch (error) {\n"
+                "    return { ok: false, reason: 'focus_failed', message: String(error) };\n"
+                "  }\n"
+                "})()"
+            )
+            try:
+                result = await self._evaluate_js(expression)
+            except Exception as exc:
+                last_error = {"ok": False, "reason": "evaluation_failed", "message": str(exc)}
+                result = last_error
+            if isinstance(result, dict) and result.get("ok"):
+                return result
+            last_error = result if isinstance(result, dict) else {"ok": False, "reason": "unknown", "result": result}
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Failed to focus selector {selector}: {last_error}")
+            await asyncio.sleep(0.25)
+
+    async def _fill_text(self, selector: str, value: str, *, clear: bool) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        expression = (
+            "(() => {\n"
+            f"  const selector = {json.dumps(selector)};\n"
+            f"  const text = {json.dumps(value)};\n"
+            f"  const shouldClear = {json.dumps(clear)};\n"
+            "  const element = document.querySelector(selector);\n"
+            "  if (!element) { return { ok: false, reason: 'not_found' }; }\n"
+            "  try {\n"
+            "    element.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });\n"
+            "    if (typeof element.focus === 'function') { element.focus({ preventScroll: true }); }\n"
+            "    if (shouldClear && 'value' in element) { element.value = ''; }\n"
+            "    if ('value' in element) { element.value = text; }\n"
+            "    else if ('textContent' in element) { element.textContent = text; }\n"
+            "    element.dispatchEvent(new Event('input', { bubbles: true }));\n"
+            "    element.dispatchEvent(new Event('change', { bubbles: true }));\n"
+            "    return { ok: true, value: ('value' in element) ? element.value : text, tagName: element.tagName };\n"
+            "  } catch (error) {\n"
+            "    return { ok: false, reason: 'fill_failed', message: String(error) };\n"
+            "  }\n"
+            "})()"
+        )
+        return await self._evaluate_js(expression)
+
+    async def _set_select_value(self, selector: str, value: str) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        expression = (
+            "(() => {\n"
+            f"  const selector = {json.dumps(selector)};\n"
+            f"  const desired = {json.dumps(value)};\n"
+            "  const element = document.querySelector(selector);\n"
+            "  if (!element || element.tagName !== 'SELECT') { return { ok: false, reason: 'not_found' }; }\n"
+            "  const options = Array.from(element.options || []);\n"
+            "  const normalize = (text) => (text || '').toString().trim().toLowerCase();\n"
+            "  const target = options.find(option => normalize(option.value) === normalize(desired))\n"
+            "    || options.find(option => normalize(option.textContent) === normalize(desired));\n"
+            "  if (!target) {\n"
+            "    return { ok: false, reason: 'option_missing', options: options.map(opt => opt.value) };\n"
+            "  }\n"
+            "  element.value = target.value;\n"
+            "  element.dispatchEvent(new Event('input', { bubbles: true }));\n"
+            "  element.dispatchEvent(new Event('change', { bubbles: true }));\n"
+            "  return { ok: true, value: element.value, label: (target.textContent || '').trim() };\n"
+            "})()"
+        )
+        return await self._evaluate_js(expression)
+
+    async def _set_radio_value(self, selector: str, value: str) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        expression = (
+            "(() => {\n"
+            f"  const selector = {json.dumps(selector)};\n"
+            f"  const desired = {json.dumps(value)};\n"
+            "  const normalize = (text) => (text || '').toString().trim().toLowerCase();\n"
+            "  const element = document.querySelector(selector);\n"
+            "  if (!element) { return { ok: false, reason: 'not_found' }; }\n"
+            "  const name = element.getAttribute('name');\n"
+            "  const candidates = name\n"
+            "    ? Array.from(document.querySelectorAll(`input[type=\"radio\"][name=\"${name}\"]`))\n"
+            "    : [element];\n"
+            "  const target = candidates.find(opt => normalize(opt.value) === normalize(desired))\n"
+            "    || candidates.find(opt => normalize(opt.getAttribute('aria-label')) === normalize(desired))\n"
+            "    || candidates.find(opt => {\n"
+            "         const label = opt.closest('label');\n"
+            "         return label && normalize(label.textContent) === normalize(desired);\n"
+            "       });\n"
+            "  if (!target) { return { ok: false, reason: 'option_missing' }; }\n"
+            "  candidates.forEach(opt => { opt.checked = opt === target; });\n"
+            "  target.dispatchEvent(new Event('input', { bubbles: true }));\n"
+            "  target.dispatchEvent(new Event('change', { bubbles: true }));\n"
+            "  const label = target.getAttribute('aria-label')\n"
+            "    || (target.closest('label') ? target.closest('label').textContent : '');\n"
+            "  return { ok: true, value: target.value, label: (label || '').trim() };\n"
+            "})()"
+        )
+        return await self._evaluate_js(expression)
+
+    async def _set_checkbox_state(self, selector: str, checked: bool) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        expression = (
+            "(() => {\n"
+            f"  const selector = {json.dumps(selector)};\n"
+            f"  const desired = {json.dumps(bool(checked))};\n"
+            "  const element = document.querySelector(selector);\n"
+            "  if (!element) { return { ok: false, reason: 'not_found' }; }\n"
+            "  element.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });\n"
+            "  element.checked = desired;\n"
+            "  element.dispatchEvent(new Event('input', { bubbles: true }));\n"
+            "  element.dispatchEvent(new Event('change', { bubbles: true }));\n"
+            "  return { ok: true, checked: Boolean(element.checked) };\n"
+            "})()"
+        )
+        return await self._evaluate_js(expression)
+
+    async def _get_field_state(self, selector: str, widget_type: str) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        expression = (
+            "(() => {\n"
+            f"  const selector = {json.dumps(selector)};\n"
+            f"  const widget = {json.dumps(widget_type)}.toString().toLowerCase();\n"
+            "  const element = document.querySelector(selector);\n"
+            "  if (!element) { return { ok: false, reason: 'not_found' }; }\n"
+            "  const normalize = (text) => (text || '').toString().trim();\n"
+            "  if (widget === 'text' || widget === 'textarea') {\n"
+            "    const value = normalize('value' in element ? element.value : element.textContent);\n"
+            "    return { ok: true, value, empty: value.length === 0 };\n"
+            "  }\n"
+            "  if (widget === 'select') {\n"
+            "    const value = normalize(element.value);\n"
+            "    const selected = element.options && element.options[element.selectedIndex];\n"
+            "    const label = selected ? normalize(selected.textContent) : '';\n"
+            "    return { ok: true, value, label, empty: value.length === 0 };\n"
+            "  }\n"
+            "  if (widget === 'radio') {\n"
+            "    const name = element.getAttribute('name');\n"
+            "    const candidates = name\n"
+            "      ? Array.from(document.querySelectorAll(`input[type=\"radio\"][name=\"${name}\"]`))\n"
+            "      : [element];\n"
+            "    const checked = candidates.find(opt => opt.checked);\n"
+            "    const label = checked\n"
+            "      ? (checked.getAttribute('aria-label')\n"
+            "        || (checked.closest('label') ? checked.closest('label').textContent : ''))\n"
+            "      : '';\n"
+            "    return { ok: true, value: checked ? normalize(checked.value) : '', label: normalize(label), checked: Boolean(checked) };\n"
+            "  }\n"
+            "  if (widget === 'checkbox') {\n"
+            "    return { ok: true, checked: Boolean(element.checked) };\n"
+            "  }\n"
+            "  return { ok: false, reason: 'unsupported_widget' };\n"
+            "})()"
+        )
+        return await self._evaluate_js(expression)
+
     async def _get_outer_html(self) -> str:
         await self._ensure_focus_ready()
         html = await self._evaluate_js("(() => document.documentElement.outerHTML)()")
@@ -400,6 +609,32 @@ class BrowserUseController:
         if self.config.profile_metadata:
             payload["profile"] = dict(self.config.profile_metadata)
         return payload
+
+    @staticmethod
+    def _extract_client_result(result: Any) -> Any:
+        if isinstance(result, Mapping) and "result" in result:
+            return result["result"]
+        return result
+
+    @staticmethod
+    def _sanitize_widget_result(result: Any, *, original: str | None = None) -> Dict[str, Any]:
+        data = BrowserUseController._extract_client_result(result)
+        if isinstance(data, Mapping):
+            sanitized: Dict[str, Any] = {}
+            for key, value in data.items():
+                if key == "value":
+                    sanitized["valueLength"] = len(str(value))
+                elif key == "options":
+                    if isinstance(value, Sequence):
+                        sanitized["optionsCount"] = len(value)
+                    else:
+                        sanitized["options"] = value
+                else:
+                    sanitized[key] = value
+            if original is not None:
+                sanitized.setdefault("valueLength", len(original))
+            return sanitized
+        return {"ok": bool(data)}
 
     # ------------------------------------------------------------------
     # Public API
@@ -576,5 +811,241 @@ class BrowserUseController:
         return BrowserActionResult(
             status=BrowserActionStatus.OK,
             details={"response": result},
+            telemetry=telemetry,
+        )
+
+    def focus(
+        self,
+        selector: str,
+        *,
+        timeout: float | None = None,
+        think_time: bool = False,
+    ) -> BrowserActionResult:
+        """Focus the given selector using Browser-Use primitives."""
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {"selector": selector, "timeout": timeout}
+        if think_time:
+            self._guardrails.think_time(payload, reason="pre_focus")
+        try:
+            result = client.focus(selector, timeout)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "error",
+                    "event": "browser.focus.failed",
+                    "sessionId": self.session_id,
+                    "selector": selector,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        telemetry = payload | {"event": "browser.focus.ok"}
+        sanitized = self._sanitize_widget_result(result)
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"response": sanitized},
+            telemetry=telemetry,
+        )
+
+    def fill_text(
+        self,
+        selector: str,
+        value: str,
+        *,
+        clear: bool = True,
+        think_time: bool = True,
+    ) -> BrowserActionResult:
+        """Fill a text input or textarea with the provided value."""
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {
+            "selector": selector,
+            "clear": clear,
+        }
+        if think_time:
+            self._guardrails.think_time(payload, reason="pre_fill")
+        try:
+            result = client.fill_text(selector, value, clear=clear)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "error",
+                    "event": "browser.fill_text.failed",
+                    "sessionId": self.session_id,
+                    "selector": selector,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        telemetry = payload | {"event": "browser.fill_text.ok"}
+        sanitized = self._sanitize_widget_result(result, original=value)
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"response": sanitized},
+            telemetry=telemetry,
+        )
+
+    def set_select_value(
+        self,
+        selector: str,
+        value: str,
+        *,
+        think_time: bool = True,
+    ) -> BrowserActionResult:
+        """Set the value of a <select> element."""
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {"selector": selector}
+        if think_time:
+            self._guardrails.think_time(payload, reason="pre_select")
+        try:
+            result = client.set_select_value(selector, value)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "error",
+                    "event": "browser.select.failed",
+                    "sessionId": self.session_id,
+                    "selector": selector,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        telemetry = payload | {"event": "browser.select.ok"}
+        sanitized = self._sanitize_widget_result(result, original=value)
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"response": sanitized},
+            telemetry=telemetry,
+        )
+
+    def set_radio_value(
+        self,
+        selector: str,
+        value: str,
+        *,
+        think_time: bool = True,
+    ) -> BrowserActionResult:
+        """Select a radio option in the group containing selector."""
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {"selector": selector}
+        if think_time:
+            self._guardrails.think_time(payload, reason="pre_radio")
+        try:
+            result = client.set_radio_value(selector, value)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "error",
+                    "event": "browser.radio.failed",
+                    "sessionId": self.session_id,
+                    "selector": selector,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        telemetry = payload | {"event": "browser.radio.ok"}
+        sanitized = self._sanitize_widget_result(result, original=value)
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"response": sanitized},
+            telemetry=telemetry,
+        )
+
+    def set_checkbox_state(
+        self,
+        selector: str,
+        checked: bool,
+        *,
+        think_time: bool = True,
+    ) -> BrowserActionResult:
+        """Toggle a checkbox state deterministically."""
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {"selector": selector, "checked": checked}
+        if think_time:
+            self._guardrails.think_time(payload, reason="pre_checkbox")
+        try:
+            result = client.set_checkbox_state(selector, checked)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "error",
+                    "event": "browser.checkbox.failed",
+                    "sessionId": self.session_id,
+                    "selector": selector,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        telemetry = payload | {"event": "browser.checkbox.ok"}
+        sanitized = self._sanitize_widget_result(result)
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"response": sanitized},
+            telemetry=telemetry,
+        )
+
+    def get_field_state(
+        self,
+        selector: str,
+        widget_type: str,
+    ) -> BrowserActionResult:
+        """Inspect current DOM state for validation diagnostics."""
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {
+            "selector": selector,
+            "widgetType": widget_type,
+        }
+        try:
+            result = client.get_field_state(selector, widget_type)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "error",
+                    "event": "browser.field_state.failed",
+                    "sessionId": self.session_id,
+                    "selector": selector,
+                    "widgetType": widget_type,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        state = self._extract_client_result(result)
+        if isinstance(state, Mapping):
+            details: Dict[str, Any] = {"state": dict(state)}
+        else:
+            details = {"state": state}
+        telemetry = payload | {"event": "browser.field_state.ok"}
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details=details,
             telemetry=telemetry,
         )
