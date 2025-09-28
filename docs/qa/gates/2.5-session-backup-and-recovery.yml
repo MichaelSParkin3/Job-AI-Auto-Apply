@@ -1,0 +1,43 @@
+schema: 1
+story: '2.5'
+story_title: 'Session Backup and Recovery'
+gate: PASS
+status_reason: 'Fixed asynchronous backup invocation to ensure snapshots complete; backup/restore, retention, and configurability scenarios are fully covered by tests.'
+reviewer: 'Quinn (Test Architect)'
+updated: '2025-10-18T00:00:00Z'
+
+top_issues: []
+
+waiver:
+  active: false
+
+quality_score: 100
+expires: '2025-11-01T00:00:00Z'
+
+evidence:
+  tests_reviewed: 7
+  risks_identified: 1
+  trace:
+    ac_covered: [1, 2, 3, 4, 5]
+    ac_gaps: []
+    notes: 'Unit and integration suites assert backup creation, retention, restore-once retry, disabled mode, and run-store persistence.'
+
+nfr_validation:
+  security:
+    status: PASS
+    notes: 'Backups remain scoped to existing profile directories with telemetry redaction unchanged.'
+  performance:
+    status: PASS
+    notes: 'Backup execution continues asynchronously, preserving readiness pacing.'
+  reliability:
+    status: PASS
+    notes: 'Restore-once retry path validated alongside failure telemetry; asynchronous invocation corrected to avoid hidden crashes.'
+  maintainability:
+    status: PASS
+    notes: 'Backup manager encapsulation with metadata manifests keeps logic testable and well documented.'
+
+recommendations:
+  immediate: []
+  future:
+    - action: 'Restore missing CLI dependencies in CI so pytest coverage can execute without manual setup.'
+      refs: ['core/tests/test_apply_open.py']

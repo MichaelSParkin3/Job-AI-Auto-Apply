@@ -669,7 +669,7 @@ def apply_open(
                     backup_manager.create_backup,
                     profile_id,
                     user_data_dir,
-                    readiness_record.id,
+                    run_id=readiness_record.id,
                 )
             else:
                 summary = backup_manager.create_backup(
