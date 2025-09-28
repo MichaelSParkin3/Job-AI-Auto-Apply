@@ -1,0 +1,40 @@
+story: '3.1'
+story_title: 'Quick Apply Discovery Safe Open'
+gate: FAIL
+status_reason: 'Discovery only evaluates the first job card selector, missing alternate SimplyHired layouts, and pytest suite skips due to missing Typer dependency so no evidence of telemetry/artifact coverage.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-10-22T00:00:00Z'
+
+top_issues:
+  - 'Discovery ignores secondary jobCardSelectors, so `li[data-testid=searchSerpJob]` layouts never enter the Quick Apply loop.'
+  - 'core/tests/test_apply_open.py skips at import time (Typer absent), leaving Quick Apply discovery behaviour unverified.'
+
+waiver:
+  active: false
+
+quality_score: 55
+expires: '2025-11-05T00:00:00Z'
+
+evidence:
+  tests_reviewed: 0
+  risks_identified: 2
+  trace:
+    ac_covered: [2, 3, 4, 5]
+    ac_gaps: [1, 7]
+    notes: 'Manual review observed selector normalization and telemetry logging, but candidate extraction stops after the first selector and no automated fixtures executed due to skipped pytest suite.'
+
+nfr_validation:
+  _assessed: [reliability, maintainability]
+  reliability:
+    status: FAIL
+    notes: 'Without alternate selector support the flow misses valid Quick Apply cards, regressing consistency across search templates.'
+  maintainability:
+    status: WARN
+    notes: 'Selector assets exist, but ignoring configured fallbacks makes future tuning brittle until the iteration logic covers all variants.'
+
+recommendations:
+  immediate:
+    - 'Iterate over every configured jobCardSelector when extracting candidates so alternate list layouts participate in discovery.'
+    - 'Install Typer (or adjust test dependencies) so core/tests/test_apply_open.py runs and asserts discovery telemetry, pagination, and artifact persistence.'
+  future:
+    - 'Add regression fixtures for inline Quick Apply flows without close buttons to verify graceful handling and telemetry.'
