@@ -2,11 +2,12 @@
 
 ## Technical Summary
 - Architecture: Local-first, privacy-preserving monolith with clear modular boundaries. Python (Typer CLI + FastAPI preview server) orchestrates the full flow; a small React + Vite UI runs as static assets served by FastAPI.
+- Decision & Run Modes: The CLI now owns a pluggable decision engine that operates in three explicit run modes (`review`, `auto_review`, `auto_submit`) so we can support human approval, AI-assisted review, and unattended submission without branching the core pipeline.
 - Frontend: React 18 + Vite + Tailwind + shadcn/ui, focused on a single Preview window to Approve/Edit/Abort. UI is small, offline-first, and keyboard-centric.
 - Backend: FastAPI app embedded alongside the CLI process provides Preview routes, serves static UI, and exposes a minimal REST API for the UI to control runs and edits.
-- Browser automation: Headful Chrome via Browser‑Use + Playwright with a stealth posture, single-tab, profile-specific persistent session, and deterministic fallbacks for uploads/widgets.
-- Storage: File-first artifacts (screenshots/video optional), `run.json`, HTML snapshots, and `history.jsonl`. Optional local SQLite index can be introduced later for search/analytics; not needed for MVP.
-- Goals alignment: Meets PRD privacy (local-only PII), reliability (95% success, retry), performance (≤120s median), and dedupe requirements with auditability.
+- Browser automation: Headful Chrome via Browser‑Use + Playwright with a stealth posture, single-tab, profile-specific persistent session, deterministic fallbacks for uploads/widgets, and structured review artifacts (screenshots, DOM plans) shared with both human and AI decision engines.
+- Storage: File-first artifacts (screenshots/video optional), `run.json`, HTML snapshots, and `history.jsonl`, now extended with decision audit trails (confidence, rationale) and queue snapshots so we can reconcile human and AI actions after the fact. Optional local SQLite index can be introduced later for search/analytics; not needed for MVP.
+- Goals alignment: Meets PRD privacy (local-only PII), reliability (95% success, retry), performance (≤120s median), dedupe, and the new autonomy roadmap (AI-assist first, full auto second, scheduled runs last) without sacrificing auditability or user override controls.
 
 ## Platform and Infrastructure Choice
 **Options considered**
@@ -15,7 +16,7 @@
 - AWS/GCP/Azure: Powerful but unnecessary for MVP; increases cost/scope; privacy trade-offs.
 
 **Recommendation**
-- Platform: Local Desktop (Windows 10/11). No cloud data storage. Optional GitHub Actions for CI (tests/build only, no PII).
+- Platform: Local Desktop (Windows 10/11). No cloud data storage. Optional GitHub Actions for CI (tests/build only, no PII). Future unattended runs rely on OS-native schedulers (Task Scheduler, cron) triggered via a lightweight adapter once full-auto mode is available.
 - Key Services: Windows filesystem, Chrome Stable, Playwright (Chromium), Python 3.11 runtime, Node 22 for building UI only.
 - Deployment Host and Regions: N/A (local-only).
 
@@ -32,11 +33,14 @@ flowchart LR
     subgraph Local Machine (Windows)
       CLI --> PREV[FastAPI Preview Server]
       PREV <-->|HTTP JSON + Static UI| UI[React + Vite (shadcn/ui)]
+      CLI --> DEC[Decision Engine\n(Human & AI modes)]
+      DEC --> QUEUE[Review Queue\n(pending candidates)]
       CLI --> BR[Browser‑Use (Playwright, Chrome headful)]
       BR --> SH[SimplyHired Quick Apply]
       CLI --> ART[Artifacts Store (screenshots, run.json, logs)]
       CLI --> HIST[history.jsonl]
       CLI --> DEDUPE[Dedupe Fingerprint]
+      SCHED[Scheduler Adapter\n(cron/Task Scheduler)] --> CLI
     end
     SH:::ext
 

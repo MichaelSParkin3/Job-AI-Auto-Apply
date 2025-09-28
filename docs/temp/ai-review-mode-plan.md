@@ -66,6 +66,12 @@
 4. **Phase D — Full Auto Submit:** Enable auto submission with failsafes; require explicit opt-in per profile/config and integrate scheduler for unattended runs.
 5. **Phase E — Scheduler/Container:** Build scheduler service/CLI integration, add Docker compatibility, document Task Scheduler/cron usage, and implement daily run automation.
 
+## 10.1 Epic Mapping
+- **Epic 4** ↔ Phase A (human queue + decision engine contract)
+- **Epic 5** ↔ Phase B (AI advisory mode)
+- **Epic 6** ↔ Phases C & D (auto submit and safety rails)
+- **Epic 8** ↔ Phase E (scheduler + unattended runs)
+
 ## 11. Open Questions & Risks
 - Acceptance criteria for “safe to auto submit” will be based on a configurable confidence level.
 - Full AI mode will rely on a single model; dual-model consensus is not required.

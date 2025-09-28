@@ -11,6 +11,7 @@
   - Platform: Local Python runtime (pipx/venv) or packaged executable
   - Build Command: `pip install -e .` (dev) / PyInstaller for single‑exe (optional)
   - Deployment Method: Zip distribution or installer; no network services created
+  - Scheduler Assets: CLI generates Task Scheduler XML / cron snippets per profile; distribution includes template directory under `scripts/scheduler/`
 
 ## CI/CD Pipeline (GitHub Actions excerpt)
 ```yaml
