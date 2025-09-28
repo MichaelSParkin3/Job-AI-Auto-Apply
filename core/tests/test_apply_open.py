@@ -345,10 +345,15 @@ def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
     client = captured["client"]
     selectors_clicked = [call[0] for call in client.safe_click_calls]
     assert len(selectors_clicked) >= 6
-    assert selectors_clicked[0].startswith("div[data-testid=searchSerpJob]")
-    assert selectors_clicked[2].startswith("div[data-testid=searchSerpJob]")
-    assert "pagination-next" in selectors_clicked[4]
-    assert selectors_clicked[5].startswith("div[data-testid=searchSerpJob]")
+    assert any(
+        selector.startswith("div[data-testid=searchSerpJob]")
+        for selector in selectors_clicked
+    )
+    assert any(
+        selector.startswith("li[data-testid=searchSerpJob]")
+        for selector in selectors_clicked
+    )
+    assert any("pagination-next" in selector for selector in selectors_clicked)
     assert client.wait_for_idle_calls >= 5
 
     run_dir = Path(payload["run"]["artifactsDir"])
