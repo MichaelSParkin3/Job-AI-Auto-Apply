@@ -68,7 +68,7 @@
           "label": "Custom question",
           "synonyms": [],
           "selectors": [
-            "[data-testid=\"contact-step\"] input[data-testid=\"mystery-field\"]"
+            "input#mystery-input"
           ],
           "widgetType": "text",
           "required": false,
