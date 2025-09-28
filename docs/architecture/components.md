@@ -35,6 +35,17 @@
 
 **Technology Stack:** Browser‑Use + Playwright (Python)
 
+### Form Fill Pipeline (Story 3.3)
+- `apps/browser/controller.py` now exposes deterministic fill primitives (`focus`, `fill_text`, `set_select_value`,
+  `set_radio_value`, `set_checkbox_state`, `get_field_state`) that wrap Browser-Use JS evaluation and return sanitised
+  telemetry (value lengths instead of raw PII).
+- `apps/cli/profiles.ProfileAnswerResolver` normalises profile YAML answers (trimmed strings, lower-case email,
+  formatted phones, override fallbacks) and generates masked previews for CLI logging.
+- `sites/simplyhired/form_filler.FormFillExecutor` replays persisted `FormFillPlan` artifacts, emits `FIELD_*` telemetry,
+  retries once on interaction errors, and validates required fields by reading back DOM state.
+- `python app.py apply open` persists a `formFill` payload to `runs/<id>/run.json` / `history.jsonl` so reviewers can track
+  filled vs skipped counts per step. CLI output prints a per-step summary table for quick inspection.
+
 ## Artifact & History Store
 **Responsibility:** Persist screenshots, `run.json`, HTML snapshot, redacted `actions.log`, append `history.jsonl`.
 

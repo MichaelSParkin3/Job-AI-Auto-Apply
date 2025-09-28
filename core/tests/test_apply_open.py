@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -148,6 +149,14 @@ class RecordingClient:
         self._idle_failures = set(idle_failures or set())
         self.wait_for_idle_calls = 0
         self.safe_click_calls: list[tuple[str, float | None]] = []
+        self.focus_calls: list[str] = []
+        self.fill_calls: list[tuple[str, str, bool]] = []
+        self.select_calls: list[tuple[str, str]] = []
+        self.radio_calls: list[tuple[str, str]] = []
+        self.checkbox_calls: list[tuple[str, bool]] = []
+        self.state_calls: list[tuple[str, str]] = []
+        self._field_values: dict[str, str] = {}
+        self._checkbox_states: dict[str, bool] = {}
 
     def open_url(self, url: str) -> dict[str, str]:
         self.open_calls.append(url)
@@ -169,6 +178,45 @@ class RecordingClient:
     def safe_click(self, selector: str, timeout: float | None = None) -> dict[str, str | float | None]:
         self.safe_click_calls.append((selector, timeout))
         return {"selector": selector, "timeout": timeout}
+
+    def focus(self, selector: str, timeout: float | None = None) -> dict[str, Any]:
+        self.focus_calls.append(selector)
+        return {"result": {"ok": True, "tagName": "INPUT"}}
+
+    def fill_text(self, selector: str, value: str, *, clear: bool = True) -> dict[str, Any]:
+        if clear:
+            self._field_values[selector] = ""
+        self._field_values[selector] = value
+        self.fill_calls.append((selector, value, clear))
+        return {"result": {"ok": True, "value": value}}
+
+    def set_select_value(self, selector: str, value: str) -> dict[str, Any]:
+        self._field_values[selector] = value
+        self.select_calls.append((selector, value))
+        return {"result": {"ok": True, "value": value, "label": value}}
+
+    def set_radio_value(self, selector: str, value: str) -> dict[str, Any]:
+        self._field_values[selector] = value
+        self.radio_calls.append((selector, value))
+        return {"result": {"ok": True, "value": value}}
+
+    def set_checkbox_state(self, selector: str, checked: bool) -> dict[str, Any]:
+        self._checkbox_states[selector] = checked
+        self.checkbox_calls.append((selector, checked))
+        return {"result": {"ok": True, "checked": checked}}
+
+    def get_field_state(self, selector: str, widget_type: str) -> dict[str, Any]:
+        self.state_calls.append((selector, widget_type))
+        if widget_type in {"text", "textarea", "select"}:
+            value = self._field_values.get(selector, "")
+            return {"result": {"ok": True, "value": value, "empty": not bool(value)}}
+        if widget_type == "checkbox":
+            checked = self._checkbox_states.get(selector, False)
+            return {"result": {"ok": True, "checked": checked}}
+        if widget_type == "radio":
+            value = self._field_values.get(selector, "")
+            return {"result": {"ok": True, "value": value, "checked": bool(value)}}
+        return {"result": {"ok": False, "reason": "unsupported"}}
 
 
 def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
@@ -390,6 +438,11 @@ def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
     assert form_telemetry["mappedFields"] == form_plan["summary"]["mappedFields"]
     assert form_telemetry["unmappedFields"] == form_plan["summary"]["unmappedFields"]
 
+    form_fill = payload["formFill"]
+    assert form_fill["summary"]["artifacts"] == 1
+    assert "filledFields" in form_fill["summary"]
+    assert payload["telemetry"]["formFill"]["artifacts"] == 1
+
     client = captured["client"]
     selectors_clicked = [call[0] for call in client.safe_click_calls]
     assert len(selectors_clicked) >= 6
@@ -418,7 +471,10 @@ def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
         for line in history_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert history_entries[-1]["summary"]["mappedFields"] == form_plan["summary"]["mappedFields"]
+    assert len(history_entries) >= 2
+    assert history_entries[-1]["fingerprint"].endswith("form-fill")
+    assert history_entries[-1]["summary"]["artifacts"] == 1
+    assert history_entries[-2]["summary"]["mappedFields"] == form_plan["summary"]["mappedFields"]
 
 
 def test_apply_open_blocks_when_resume_missing(tmp_path: Path, monkeypatch):

@@ -98,6 +98,31 @@ class HistoryWriter:
             }
         )
 
+    def append_form_fill(
+        self,
+        context: RunContext,
+        *,
+        profile_id: Optional[str],
+        search_url: str,
+        summary: Mapping[str, object],
+        dry_run: bool,
+    ) -> Path:
+        """Append a history record for form filling outcomes."""
+
+        payload: dict[str, object] = {
+            "id": context.id,
+            "profileId": profile_id or "",
+            "postingUrl": "simplyhired://quick-apply-form-fill",
+            "searchUrl": search_url,
+            "fingerprint": f"{context.id}:form-fill",
+            "status": "skipped",
+            "source": "simplyhired",
+            "runPath": str(context.run_dir),
+            "dryRun": dry_run,
+            "summary": dict(summary),
+        }
+        return self.append_entry(payload)
+
     def _append_jsonl(self, payload: dict[str, object]) -> None:
         serialized = json.dumps(payload, ensure_ascii=False)
         self.history_path.parent.mkdir(parents=True, exist_ok=True)

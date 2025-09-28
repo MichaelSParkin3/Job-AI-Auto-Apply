@@ -6,7 +6,10 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+
+import re
+import unicodedata
 
 import yaml
 from pydantic import (
@@ -25,6 +28,48 @@ from .config_loader import (
     load_active_profile,
 )
 from .utils import ApiError, log_event
+
+
+def _normalize_key(value: str) -> str:
+    """Return a canonical key for override lookups."""
+
+    normalized = unicodedata.normalize("NFKC", value or "")
+    normalized = normalized.casefold()
+    normalized = re.sub(r"[^a-z0-9]+", "", normalized)
+    return normalized
+
+
+def _collapse_whitespace(value: str) -> str:
+    """Collapse whitespace for deterministic preview strings."""
+
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _normalize_phone(value: str) -> str | None:
+    """Return the phone number formatted as `+1 555 555 5555` when possible."""
+
+    digits = re.sub(r"\D", "", value or "")
+    if not digits:
+        return None
+    if len(digits) == 10:
+        return f"+1 {digits[0:3]} {digits[3:6]} {digits[6:]}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+1 {digits[1:4]} {digits[4:7]} {digits[7:]}"
+    return "+" + digits
+
+
+@dataclass(slots=True)
+class ResolvedAnswer:
+    """Represents a resolved answer from the active profile."""
+
+    value: str | bool | None
+    status: str
+    source: str | None = None
+    reason: str | None = None
+
+    @property
+    def is_resolved(self) -> bool:
+        return self.status == "resolved"
 
 
 @dataclass(frozen=True)
@@ -682,3 +727,291 @@ class ProfileService:
             raise error
 
         return binding
+
+
+class ProfileAnswerResolver:
+    """Resolve form answers using profile identity and overrides."""
+
+    def __init__(
+        self,
+        *,
+        profile: ProfileConfig | None,
+        binding: ProfileBinding | None = None,
+    ) -> None:
+        self._profile = profile
+        self.profile_id = (
+            binding.profile_id
+            if binding is not None
+            else (profile.id if profile is not None else None)
+        )
+        self.display_name = (
+            binding.display_name
+            if binding is not None
+            else (profile.display_name if profile is not None else None)
+        )
+        self._override_index: Dict[str, str] = {}
+        if profile is not None:
+            self._register_overrides(profile.qa_overrides)
+        if binding is not None:
+            self._register_overrides(binding.qa_overrides)
+        self._links_index: Dict[str, str] = {}
+        if profile is not None:
+            for key, value in profile.links.items():
+                if isinstance(value, str) and value.strip():
+                    self._links_index[_normalize_key(key)] = value.strip()
+            # Allow quick lookups for canonical keys such as "linkedin"
+            for key, value in profile.links.items():
+                if isinstance(value, str) and value.strip():
+                    lowered = key.lower()
+                    if "linkedin" in lowered:
+                        self._links_index.setdefault("linkedin", value.strip())
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def resolve(
+        self,
+        *,
+        profile_field: str,
+        label: str | None = None,
+        options: Sequence[Mapping[str, Any]] | None = None,
+        synonyms: Iterable[str] | None = None,
+    ) -> ResolvedAnswer:
+        handler = getattr(self, f"_resolve_{profile_field}", None)
+        if handler:
+            answer = handler(label=label, options=options, synonyms=synonyms)
+            if isinstance(answer, ResolvedAnswer):
+                return answer
+
+        return self._resolve_from_overrides(
+            profile_field,
+            label=label,
+            options=options,
+            synonyms=synonyms,
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _register_overrides(self, overrides: Mapping[str, Any]) -> None:
+        for key, value in overrides.items():
+            if not isinstance(value, str):
+                value = str(value)
+            normalized = _normalize_key(key)
+            if normalized:
+                self._override_index[normalized] = value.strip()
+
+    def _candidate_keys(
+        self,
+        profile_field: str,
+        *,
+        label: str | None,
+        options: Sequence[Mapping[str, Any]] | None,
+        synonyms: Iterable[str] | None,
+        extra: Iterable[str] | None = None,
+    ) -> list[str]:
+        candidates: list[str] = []
+        if profile_field:
+            candidates.append(profile_field)
+            spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", profile_field)
+            if spaced and spaced != profile_field:
+                candidates.append(spaced)
+        if label:
+            candidates.append(label)
+        if synonyms:
+            candidates.extend(synonyms)
+        if options:
+            for option in options:
+                label_value = option.get("label")
+                if isinstance(label_value, str) and label_value.strip():
+                    candidates.append(label_value)
+                value = option.get("value")
+                if isinstance(value, str) and value.strip():
+                    candidates.append(value)
+        if extra:
+            candidates.extend(extra)
+        # Remove empty entries while preserving order
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for candidate in candidates:
+            normalized = _normalize_key(candidate)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                ordered.append(candidate)
+        return ordered
+
+    def _resolve_from_overrides(
+        self,
+        profile_field: str,
+        *,
+        label: str | None,
+        options: Sequence[Mapping[str, Any]] | None,
+        synonyms: Iterable[str] | None,
+        extra: Iterable[str] | None = None,
+    ) -> ResolvedAnswer:
+        candidates = self._candidate_keys(
+            profile_field,
+            label=label,
+            options=options,
+            synonyms=synonyms,
+            extra=extra,
+        )
+        for candidate in candidates:
+            normalized = _normalize_key(candidate)
+            if normalized and normalized in self._override_index:
+                value = _collapse_whitespace(self._override_index[normalized])
+                return ResolvedAnswer(
+                    value=value,
+                    status="resolved",
+                    source="qa_override",
+                )
+        return ResolvedAnswer(
+            value=None,
+            status="missing",
+            source="qa_override",
+            reason="profile_missing",
+        )
+
+    # ------------------------------------------------------------------
+    # Field-specific resolvers
+    # ------------------------------------------------------------------
+    def _resolve_fullName(self, **_kwargs: Any) -> ResolvedAnswer:
+        if self._profile and self._profile.identity.full_name:
+            value = _collapse_whitespace(self._profile.identity.full_name)
+            return ResolvedAnswer(value=value, status="resolved", source="identity.full_name")
+        return ResolvedAnswer(
+            value=None,
+            status="missing",
+            source="identity.full_name",
+            reason="profile_missing",
+        )
+
+    def _resolve_email(self, **_kwargs: Any) -> ResolvedAnswer:
+        if self._profile and self._profile.identity.email:
+            email = _collapse_whitespace(self._profile.identity.email)
+            return ResolvedAnswer(value=email.casefold(), status="resolved", source="identity.email")
+        return ResolvedAnswer(
+            value=None,
+            status="missing",
+            source="identity.email",
+            reason="profile_missing",
+        )
+
+    def _resolve_phone(self, **_kwargs: Any) -> ResolvedAnswer:
+        if self._profile and self._profile.identity.phone:
+            normalized = _normalize_phone(self._profile.identity.phone)
+            if normalized:
+                return ResolvedAnswer(value=normalized, status="resolved", source="identity.phone")
+        return ResolvedAnswer(
+            value=None,
+            status="missing",
+            source="identity.phone",
+            reason="profile_missing",
+        )
+
+    def _resolve_preferredName(self, **_kwargs: Any) -> ResolvedAnswer:
+        override = self._resolve_from_overrides("preferredName", label=None, options=None, synonyms=None)
+        if override.is_resolved:
+            return override
+        full_name = None
+        if self._profile and self._profile.identity.full_name:
+            full_name = self._profile.identity.full_name.strip()
+        elif self.display_name:
+            full_name = self.display_name.strip()
+        if full_name:
+            first = full_name.split()[0]
+            if first:
+                return ResolvedAnswer(value=first, status="resolved", source="identity.full_name")
+        return ResolvedAnswer(
+            value=None,
+            status="missing",
+            source="preferredName",
+            reason="profile_missing",
+        )
+
+    def _resolve_linkedinUrl(self, **_kwargs: Any) -> ResolvedAnswer:
+        override = self._resolve_from_overrides("linkedin", label=None, options=None, synonyms=None, extra=["linkedinurl"])
+        if override.is_resolved:
+            return override
+        if "linkedin" in self._links_index:
+            return ResolvedAnswer(
+                value=self._links_index["linkedin"],
+                status="resolved",
+                source="links.linkedin",
+            )
+        if self._profile and self._profile.identity.portfolio:
+            for entry in self._profile.identity.portfolio:
+                if isinstance(entry, str) and "linkedin" in entry.lower():
+                    return ResolvedAnswer(value=entry.strip(), status="resolved", source="identity.portfolio")
+        return ResolvedAnswer(
+            value=None,
+            status="missing",
+            source="links.linkedin",
+            reason="profile_missing",
+        )
+
+    def _resolve_coverLetter(self, **_kwargs: Any) -> ResolvedAnswer:
+        override = self._resolve_from_overrides("coverLetter", label=None, options=None, synonyms=None)
+        if override.is_resolved:
+            return override
+        if not self._profile or not self._profile.identity.full_name:
+            return ResolvedAnswer(
+                value=None,
+                status="missing",
+                source="coverLetter",
+                reason="profile_missing",
+            )
+        first_name = self._profile.identity.full_name.split()[0]
+        location = self._profile.identity.location or "remote"
+        summary = (
+            f"Hello, I'm {first_name}. I am interested in this opportunity and have experience working {location.lower()}."
+        )
+        return ResolvedAnswer(
+            value=summary,
+            status="resolved",
+            source="identity.narrative",
+        )
+
+    def _resolve_workAuthorization(
+        self,
+        *,
+        label: str | None,
+        options: Sequence[Mapping[str, Any]] | None,
+        synonyms: Iterable[str] | None,
+    ) -> ResolvedAnswer:
+        return self._resolve_from_overrides(
+            "workAuthorization",
+            label=label,
+            options=options,
+            synonyms=synonyms,
+            extra=["authorized", "authorization"],
+        )
+
+    def _resolve_relocation(
+        self,
+        *,
+        label: str | None,
+        options: Sequence[Mapping[str, Any]] | None,
+        synonyms: Iterable[str] | None,
+    ) -> ResolvedAnswer:
+        return self._resolve_from_overrides(
+            "relocation",
+            label=label,
+            options=options,
+            synonyms=synonyms,
+        )
+
+    def _resolve_experienceLevel(
+        self,
+        *,
+        label: str | None,
+        options: Sequence[Mapping[str, Any]] | None,
+        synonyms: Iterable[str] | None,
+    ) -> ResolvedAnswer:
+        return self._resolve_from_overrides(
+            "experienceLevel",
+            label=label,
+            options=options,
+            synonyms=synonyms,
+            extra=["experience"],
+        )
