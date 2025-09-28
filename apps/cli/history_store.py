@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 import portalocker
 
@@ -60,6 +60,31 @@ class HistoryWriter:
         }
         if edits:
             payload["notes"] = edits
+        return self.append_entry(payload)
+
+    def append_form_plan(
+        self,
+        context: RunContext,
+        *,
+        profile_id: Optional[str],
+        search_url: str,
+        summary: Mapping[str, object],
+        dry_run: bool,
+    ) -> Path:
+        """Append a history record summarising form mapping outcomes."""
+
+        payload: dict[str, object] = {
+            "id": context.id,
+            "profileId": (profile_id or ""),
+            "postingUrl": "simplyhired://quick-apply-form-plan",
+            "searchUrl": search_url,
+            "fingerprint": f"{context.id}:form-plan",
+            "status": "skipped",
+            "source": "simplyhired",
+            "runPath": str(context.run_dir),
+            "dryRun": dry_run,
+            "summary": dict(summary),
+        }
         return self.append_entry(payload)
 
     def plan_retention(self) -> None:

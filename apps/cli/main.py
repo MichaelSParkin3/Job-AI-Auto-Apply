@@ -21,6 +21,7 @@ from apps.browser import (
     SessionBackupManager,
 )
 from apps.preview.runner import run_preview_service
+from sites.simplyhired.form_mapper import FormSelectorLibrary, FormStructureMapper
 from sites.simplyhired.quick_apply_discovery import QuickApplyDiscovery
 from sites.simplyhired.search_readiness import SearchReadinessDetector
 from .config_loader import (
@@ -883,6 +884,121 @@ def apply_open(
         store.record_quick_apply_discovery(readiness_record, discovery_payload)
         payload["discovery"] = discovery_payload
         payload["telemetry"]["quickApplyDiscovery"] = summary.telemetry_payload()
+
+        form_selectors_base = (
+            base / "sites" / "simplyhired" / "selectors" / "form-fields.json"
+        )
+        if not form_selectors_base.exists():
+            typer.secho(
+                f"Form selector map not found at {form_selectors_base}.",
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1)
+
+        form_selector_overrides: list[Path] = []
+        if profile_id:
+            profile_override = (
+                base
+                / "data"
+                / "profiles"
+                / profile_id
+                / "selectors"
+                / "form-fields.json"
+            )
+            if profile_override.exists():
+                form_selector_overrides.append(profile_override)
+
+        try:
+            selector_library = FormSelectorLibrary.load(
+                form_selectors_base, overrides=form_selector_overrides
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            typer.secho(str(exc), fg=typer.colors.RED)
+            raise typer.Exit(code=1) from exc
+
+        form_plan_artifacts: list[dict[str, Any]] = []
+        total_steps = 0
+        total_mapped = 0
+        total_unmapped = 0
+        browser_use_version = "0.7.9"
+
+        for artifact_path in discovery_payload.get("artifacts", []):
+            artifact = Path(artifact_path)
+            if not artifact.exists():
+                log_event(
+                    {
+                        "level": "warning",
+                        "event": "FORM_ARTIFACT_MISSING",
+                        "path": artifact_path,
+                    }
+                )
+                continue
+            html = artifact.read_text(encoding="utf-8")
+            mapper = FormStructureMapper(html, selector_library)
+            plan = mapper.generate_plan()
+            plan_payload = plan.to_payload()
+            plan_payload["artifact"] = artifact_path
+            form_plan_artifacts.append(plan_payload)
+            summary_payload = plan_payload["summary"]
+            total_steps += int(summary_payload.get("steps", 0))
+            total_mapped += int(summary_payload.get("mappedFields", 0))
+            total_unmapped += int(summary_payload.get("unmappedFields", 0))
+            for step_plan in plan.steps:
+                log_event(
+                    {
+                        "event": "FORM_MAPPED",
+                        "step": step_plan.step_id,
+                        "artifact": artifact_path,
+                        "mappedFields": len(step_plan.mapped),
+                        "unmappedFields": len(step_plan.unmapped),
+                        "profileId": profile_id,
+                        "browserUseVersion": browser_use_version,
+                    }
+                )
+                for unmapped_field in step_plan.unmapped:
+                    log_event(
+                        {
+                            "level": "warning",
+                            "event": "FORM_UNMAPPED",
+                            "step": step_plan.step_id,
+                            "profileId": profile_id,
+                            "reason": unmapped_field.reason,
+                            "diagnostics": unmapped_field.diagnostics,
+                            "artifact": artifact_path,
+                            "browserUseVersion": browser_use_version,
+                        }
+                    )
+
+        form_plan_summary = {
+            "artifacts": len(form_plan_artifacts),
+            "steps": total_steps,
+            "mappedFields": total_mapped,
+            "unmappedFields": total_unmapped,
+        }
+        form_plan_payload = {
+            "artifacts": form_plan_artifacts,
+            "summary": form_plan_summary,
+            "selectors": {
+                "base": str(form_selectors_base),
+                "overrides": [str(path) for path in form_selector_overrides],
+            },
+        }
+        payload["formPlan"] = form_plan_payload
+        payload["telemetry"]["formMapping"] = form_plan_summary | {
+            "browserUseVersion": browser_use_version,
+        }
+        store.record_form_plan(readiness_record, form_plan_payload)
+
+        history_writer = HistoryWriter(base=base)
+        context = get_run_context()
+        if context:
+            history_writer.append_form_plan(
+                context,
+                profile_id=profile_id,
+                search_url=search_url,
+                summary=form_plan_summary,
+                dry_run=dry_run,
+            )
 
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     except (FileNotFoundError, ValueError) as exc:

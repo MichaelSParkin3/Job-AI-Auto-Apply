@@ -138,6 +138,8 @@ python app.py profiles list
 ### Browser-Use Session Bootstrap
 Use the new `apply open` command to launch Browser-Use in headful Chrome with profile-bound persistence:
 
+> **Release Notes & Docs:** The automation targets Browser-Use 0.7.9. Bookmark the official [introduction](https://docs.browser-use.com/introduction) and [changelog](https://docs.browser-use.com/changelog) so you can track breaking CDP or event lifecycle changes before updating selector heuristics.
+
 ```bash
 # Launch a dry-run Browser-Use session for the active profile
 python app.py apply open "https://www.simplyhired.com/search?q=python&l=remote"

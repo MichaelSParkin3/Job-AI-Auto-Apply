@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <body>
+    <div data-testid="employer-questions">
+      <fieldset data-question="authorization">
+        <legend>Are you legally authorized to work in the US?</legend>
+        <label>
+          <input type="radio" name="authorization" value="yes" />
+          Yes
+        </label>
+        <label>
+          <input type="radio" name="authorization" value="no" />
+          No
+        </label>
+      </fieldset>
+      <fieldset data-question="relocation">
+        <legend>Are you open to relocation?</legend>
+        <label>
+          <input type="checkbox" name="relocation" value="yes" />
+          Yes
+        </label>
+      </fieldset>
+      <label for="experience-level">Experience level</label>
+      <select id="experience-level" name="experienceLevel">
+        <option value="">Select</option>
+        <option value="mid">Mid</option>
+        <option value="senior">Senior</option>
+      </select>
+    </div>
+  </body>
+</html>

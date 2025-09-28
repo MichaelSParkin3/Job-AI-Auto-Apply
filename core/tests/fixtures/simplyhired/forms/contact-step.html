@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+  <body>
+    <form data-testid="contact-step">
+      <div class="field">
+        <label for="contact-full-name">Full legal name</label>
+        <input
+          id="contact-full-name"
+          name="fullName"
+          data-testid="contact-full-name"
+          required
+        />
+      </div>
+      <div class="field">
+        <label for="contact-email">Primary email</label>
+        <input
+          id="contact-email"
+          name="email"
+          type="email"
+          data-testid="contact-email"
+          required
+        />
+      </div>
+      <div class="field">
+        <span id="phone-label">Best phone number</span>
+        <input
+          id="contact-phone"
+          name="phone"
+          data-testid="contact-phone"
+          aria-labelledby="phone-label"
+        />
+      </div>
+      <div class="field">
+        <label>
+          Preferred name
+          <input
+            name="preferredName"
+            data-testid="contact-preferred-name"
+          />
+        </label>
+      </div>
+      <div class="field">
+        <input
+          name="linkedinUrl"
+          data-testid="contact-linkedin"
+          placeholder="LinkedIn profile URL"
+        />
+      </div>
+    </form>
+  </body>
+</html>

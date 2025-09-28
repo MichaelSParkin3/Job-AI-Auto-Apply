@@ -22,6 +22,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SELECTOR_SOURCE = (
     PROJECT_ROOT / "sites" / "simplyhired" / "selectors" / "search-readiness.json"
 )
+FORM_SELECTOR_SOURCE = (
+    PROJECT_ROOT / "sites" / "simplyhired" / "selectors" / "form-fields.json"
+)
 FIXTURES_DIR = PROJECT_ROOT / "core" / "tests" / "fixtures" / "simplyhired" / "search"
 QUICK_APPLY_SELECTOR_SOURCE = (
     PROJECT_ROOT / "sites" / "simplyhired" / "selectors" / "quick-apply.json"
@@ -61,6 +64,16 @@ def _prepare_quick_apply_selectors(base: Path) -> Path:
     destination = target / "quick-apply.json"
     destination.write_text(
         QUICK_APPLY_SELECTOR_SOURCE.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return destination
+
+
+def _prepare_form_selectors(base: Path) -> Path:
+    target = base / "sites" / "simplyhired" / "selectors"
+    target.mkdir(parents=True, exist_ok=True)
+    destination = target / "form-fields.json"
+    destination.write_text(
+        FORM_SELECTOR_SOURCE.read_text(encoding="utf-8"), encoding="utf-8"
     )
     return destination
 
@@ -162,6 +175,7 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
     _prepare_quick_apply_selectors(tmp_path)
+    _prepare_form_selectors(tmp_path)
     _bootstrap_profile(tmp_path)
 
     captured_config: dict[str, object] = {}
@@ -222,10 +236,24 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     assert payload["telemetry"]["quickApplyDiscovery"]["processed"] == 0
     assert payload["telemetry"]["quickApplyDiscovery"]["opened"] == 0
 
+    form_plan = payload["formPlan"]
+    assert form_plan["summary"] == {
+        "artifacts": 0,
+        "steps": 0,
+        "mappedFields": 0,
+        "unmappedFields": 0,
+    }
+    assert form_plan["selectors"]["base"].endswith("form-fields.json")
+    form_telemetry = payload["telemetry"]["formMapping"]
+    assert form_telemetry["browserUseVersion"] == "0.7.9"
+    assert form_telemetry["mappedFields"] == 0
+    assert form_telemetry["unmappedFields"] == 0
+
     run_dir = Path(payload["run"]["artifactsDir"])
     run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert run_json["status"] == "quick_apply_discovery"
     assert run_json["discovery"]["summary"]["processedCount"] == 0
+    assert run_json["formPlan"]["summary"]["mappedFields"] == 0
     backups = payload["backups"]
     assert backups["enabled"] is True
     assert backups["retention"] == 2
@@ -267,11 +295,24 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     assert payload_override["model"] == "cli-model"
     assert payload_override["readiness"]["status"] == "ready"
 
+    history_path = tmp_path / "history" / "history.jsonl"
+    assert history_path.exists()
+    history_entries = [
+        json.loads(line)
+        for line in history_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert history_entries, "Expected at least one history entry"
+    last_entry = history_entries[-1]
+    assert last_entry["fingerprint"].endswith("form-plan")
+    assert last_entry["summary"]["mappedFields"] == 0
+
 
 def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
     _prepare_quick_apply_selectors(tmp_path)
+    _prepare_form_selectors(tmp_path)
     _bootstrap_profile(tmp_path)
 
     snapshots = [
@@ -342,6 +383,13 @@ def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
     assert telemetry["duplicates"] == 1
     assert telemetry["limitRemaining"] == 0
 
+    form_plan = payload["formPlan"]
+    assert form_plan["summary"]["artifacts"] >= 2
+    assert form_plan["summary"]["mappedFields"] > 0
+    form_telemetry = payload["telemetry"]["formMapping"]
+    assert form_telemetry["mappedFields"] == form_plan["summary"]["mappedFields"]
+    assert form_telemetry["unmappedFields"] == form_plan["summary"]["unmappedFields"]
+
     client = captured["client"]
     selectors_clicked = [call[0] for call in client.safe_click_calls]
     assert len(selectors_clicked) >= 6
@@ -362,12 +410,22 @@ def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
 
     run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert run_json["discovery"]["summary"]["openedCount"] == 2
+    assert run_json["formPlan"]["summary"]["mappedFields"] == form_plan["summary"]["mappedFields"]
+
+    history_path = tmp_path / "history" / "history.jsonl"
+    history_entries = [
+        json.loads(line)
+        for line in history_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert history_entries[-1]["summary"]["mappedFields"] == form_plan["summary"]["mappedFields"]
 
 
 def test_apply_open_blocks_when_resume_missing(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
     _prepare_quick_apply_selectors(tmp_path)
+    _prepare_form_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
     resume_path = tmp_path / "data" / "resumes" / "frontend-dev" / "resume.pdf"
     resume_path.unlink()
@@ -401,6 +459,7 @@ def test_apply_open_readiness_failure_records_artifacts(tmp_path: Path, monkeypa
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
     _prepare_quick_apply_selectors(tmp_path)
+    _prepare_form_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
 
     spinner_html = _load_fixture("spinner.html")
@@ -442,6 +501,7 @@ def test_apply_open_switch_profiles_isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
     _prepare_quick_apply_selectors(tmp_path)
+    _prepare_form_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
     _bootstrap_profile(
         tmp_path,
@@ -518,6 +578,7 @@ def test_apply_open_restores_session_on_launch_error(tmp_path: Path, monkeypatch
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
     _prepare_quick_apply_selectors(tmp_path)
+    _prepare_form_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
 
     session_dir = tmp_path / ".local" / "browser" / "profiles" / "frontend-dev"
@@ -565,6 +626,7 @@ def test_apply_open_backup_disabled_skips(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
     _prepare_search_selectors(tmp_path)
     _prepare_quick_apply_selectors(tmp_path)
+    _prepare_form_selectors(tmp_path)
     _bootstrap_profile(tmp_path, profile_id="frontend-dev")
 
     baseline_html = _load_fixture("baseline.html")

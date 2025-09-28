@@ -3,7 +3,81 @@
   <body>
     <section id="job-detail" data-jobkey="job-1">
       <h1>Senior QA Engineer</h1>
-      <a data-testid="viewJobHeaderFooterApplyButton" href="https://simplyhired.com/apply/job-1">Quick Apply</a>
+      <div data-testid="quickApplyModal">
+        <form data-testid="contact-step">
+          <div class="field">
+            <label for="contact-full-name">Legal name</label>
+            <input
+              id="contact-full-name"
+              name="fullName"
+              data-testid="contact-full-name"
+              required
+            />
+          </div>
+          <div class="field">
+            <label for="contact-email">Email address</label>
+            <input
+              id="contact-email"
+              name="email"
+              type="email"
+              data-testid="contact-email"
+              required
+            />
+          </div>
+          <div class="field">
+            <span id="contact-phone-label">Phone number</span>
+            <span id="contact-phone-hint">Include country code</span>
+            <input
+              name="phone"
+              data-testid="contact-phone"
+              aria-labelledby="contact-phone-label contact-phone-hint"
+            />
+          </div>
+        </form>
+        <form data-testid="experience-step">
+          <div class="field">
+            <label for="experience-cover-letter">Summary</label>
+            <textarea
+              id="experience-cover-letter"
+              name="coverLetter"
+              data-testid="experience-cover-letter"
+            ></textarea>
+          </div>
+        </form>
+        <div data-testid="employer-questions">
+          <fieldset data-question="authorization">
+            <legend>Are you legally authorized to work in the US?</legend>
+            <label>
+              <input
+                type="radio"
+                name="authorization"
+                value="yes"
+                data-testid="authorization-yes"
+              />
+              Yes
+            </label>
+            <label>
+              <input type="radio" name="authorization" value="no" />
+              No
+            </label>
+          </fieldset>
+          <label for="employment-experience-select">Years of experience</label>
+          <select
+            id="employment-experience-select"
+            name="experienceLevel"
+            data-testid="experience-level"
+          >
+            <option value="">Select</option>
+            <option value="mid">3-5 years</option>
+            <option value="senior">6-8 years</option>
+          </select>
+        </div>
+      </div>
+      <a
+        data-testid="viewJobHeaderFooterApplyButton"
+        href="https://simplyhired.com/apply/job-1"
+        >Quick Apply</a
+      >
       <button data-testid="modalCloseButton">Close</button>
     </section>
   </body>

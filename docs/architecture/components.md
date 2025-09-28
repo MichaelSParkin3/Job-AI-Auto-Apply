@@ -77,3 +77,4 @@ C4Container
 - Locale/timezone are applied via environment (`LANG`/`LC_ALL`/`TZ`), `Accept-Language`, and `--lang`; deprecated `locale`/`timezone_id` kwargs are no longer passed to `BrowserSession`.
 - Session backups are created under `.local/browser/backups/<profile>` and skip Chrome cache/lock files to reduce permission errors; retention is configurable.
 - Readiness selectors include a 2025 variant using `data-testid` attributes to align with current SimplyHired markup.
+- Release monitoring: engineers must track Browser-Use API changes via the [introduction](https://docs.browser-use.com/introduction) and [changelog](https://docs.browser-use.com/changelog) before updating selectors or DOM-mapping heuristics.

@@ -320,6 +320,16 @@ class RunStore:
         self._write_run_json(record.run_json_path, data)
         return data
 
+    def record_form_plan(
+        self, record: RunRecord, form_plan_payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Persist the form fill plan alongside discovery metadata."""
+
+        data = self._load_run_json(record.run_json_path)
+        data["formPlan"] = form_plan_payload
+        self._write_run_json(record.run_json_path, data)
+        return data
+
     def load_run_payload(self, record: RunRecord) -> Dict[str, Any]:
         """Return the current run.json payload for the given record."""
 

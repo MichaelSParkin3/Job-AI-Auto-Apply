@@ -5,6 +5,31 @@
       <h1>Automation Lead</h1>
       <div data-testid="quickApplyInline">
         <p>Inline Quick Apply Form</p>
+        <form data-testid="contact-step">
+          <div class="field">
+            <label>
+              Preferred name
+              <input
+                name="preferredName"
+                data-testid="contact-preferred-name"
+              />
+            </label>
+          </div>
+          <div class="field">
+            <input
+              name="linkedinUrl"
+              data-testid="contact-linkedin"
+              placeholder="LinkedIn profile URL"
+              required
+            />
+          </div>
+        </form>
+        <div data-testid="employer-questions">
+          <label>
+            <input type="checkbox" name="remote" value="yes" />
+            Willing to work remotely
+          </label>
+        </div>
         <button data-testid="quickApplyClose">Close</button>
       </div>
     </section>

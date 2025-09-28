@@ -1,0 +1,136 @@
+{
+  "$schema": "https://job-ai-auto-apply/schemas/form-selectors.json",
+  "version": "2025.10.26",
+  "steps": {
+    "contact": {
+      "title": "Contact information",
+      "fields": [
+        {
+          "profileField": "fullName",
+          "label": "Full name",
+          "synonyms": ["legal name", "full legal name"],
+          "selectors": [
+            "[data-testid=\"contact-step\"] input[data-testid=\"contact-full-name\"]",
+            "input#contact-full-name"
+          ],
+          "widgetType": "text",
+          "required": true,
+          "valueAttribute": "value"
+        },
+        {
+          "profileField": "email",
+          "label": "Email address",
+          "synonyms": ["primary email", "work email"],
+          "selectors": [
+            "[data-testid=\"contact-step\"] input[data-testid=\"contact-email\"]",
+            "input#contact-email"
+          ],
+          "widgetType": "text",
+          "required": true,
+          "valueAttribute": "value"
+        },
+        {
+          "profileField": "phone",
+          "label": "Phone number",
+          "synonyms": ["best phone", "mobile"],
+          "selectors": [
+            "[data-testid=\"contact-step\"] input[data-testid=\"contact-phone\"]",
+            "input#contact-phone"
+          ],
+          "widgetType": "text",
+          "required": false,
+          "valueAttribute": "value"
+        },
+        {
+          "profileField": "preferredName",
+          "label": "Preferred name",
+          "synonyms": ["nickname", "preferred"],
+          "selectors": [
+            "[data-testid=\"contact-step\"] input[data-testid=\"contact-preferred-name\"]"
+          ],
+          "widgetType": "text",
+          "required": false,
+          "valueAttribute": "value"
+        },
+        {
+          "profileField": "linkedinUrl",
+          "label": "LinkedIn profile",
+          "synonyms": ["linkedin", "linkedin profile url"],
+          "selectors": [
+            "[data-testid=\"contact-step\"] input[data-testid=\"contact-linkedin\"]"
+          ],
+          "widgetType": "text",
+          "required": false,
+          "valueAttribute": "value"
+        },
+        {
+          "profileField": "customQuestion",
+          "label": "Custom question",
+          "synonyms": [],
+          "selectors": [
+            "[data-testid=\"contact-step\"] input[data-testid=\"mystery-field\"]"
+          ],
+          "widgetType": "text",
+          "required": false,
+          "valueAttribute": "value"
+        }
+      ]
+    },
+    "experience": {
+      "title": "Experience",
+      "fields": [
+        {
+          "profileField": "coverLetter",
+          "label": "Cover letter",
+          "synonyms": ["summary", "introduce yourself"],
+          "selectors": [
+            "[data-testid=\"experience-step\"] textarea[data-testid=\"experience-cover-letter\"]"
+          ],
+          "widgetType": "textarea",
+          "required": false,
+          "valueAttribute": "value"
+        }
+      ]
+    },
+    "employerQuestions": {
+      "title": "Employer questions",
+      "fields": [
+        {
+          "profileField": "workAuthorization",
+          "label": "Are you legally authorized to work in the US?",
+          "synonyms": ["work authorization", "authorized to work"],
+          "selectors": [
+            "[data-testid=\"employer-questions\"] input[name=\"authorization\"]"
+          ],
+          "widgetType": "radio",
+          "required": true,
+          "valueAttribute": "value"
+        },
+        {
+          "profileField": "relocation",
+          "label": "Are you open to relocation?",
+          "synonyms": ["relocation", "willing to relocate"],
+          "selectors": [
+            "[data-testid=\"employer-questions\"] input[name=\"relocation\"]"
+          ],
+          "widgetType": "checkbox",
+          "required": false,
+          "valueAttribute": "value"
+        },
+        {
+          "profileField": "experienceLevel",
+          "label": "Experience level",
+          "synonyms": ["years of experience", "experience"],
+          "selectors": [
+            "[data-testid=\"employer-questions\"] select[name=\"experienceLevel\"]",
+            "select#experience-level",
+            "select#employment-experience-select"
+          ],
+          "widgetType": "select",
+          "required": false,
+          "valueAttribute": "value"
+        }
+      ]
+    }
+  }
+}
