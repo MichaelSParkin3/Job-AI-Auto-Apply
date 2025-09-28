@@ -1,0 +1,37 @@
+{
+  "jobCardSelectors": [
+    "div[data-testid=searchSerpJob]",
+    "li[data-testid=searchSerpJob]"
+  ],
+  "jobCardQuickApplySelectors": [
+    "p[data-testid=searchSerpJobQuickApply]",
+    "[data-testid=searchSerpJobQuickApply]"
+  ],
+  "jobCardLinkSelectors": [
+    "a[data-testid=searchSerpJobTitle]",
+    "a.jobposting-title"
+  ],
+  "jobKeyAttributes": [
+    "data-jobkey",
+    "data-jk",
+    "data-id"
+  ],
+  "detailQuickApplySelectors": [
+    "a[data-testid=viewJobHeaderFooterApplyButton]",
+    "button[data-testid=viewJobHeaderFooterApplyButton]"
+  ],
+  "detailInlineSelectors": [
+    "[data-testid=quickApplyInline]",
+    "[data-testid=applicationForm]"
+  ],
+  "detailCloseSelectors": [
+    "button[data-testid=modalCloseButton]",
+    "button[data-testid=quickApplyClose]",
+    "[data-testid=modalCloseButton]"
+  ],
+  "paginationNextSelectors": [
+    "a[data-testid=pagination-next]",
+    "button[data-testid=pagination-next]",
+    "a[aria-label=Next]"
+  ]
+}

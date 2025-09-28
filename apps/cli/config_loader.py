@@ -34,6 +34,7 @@ DEFAULTS = {
     "search_ready_backoff_seconds": 2.0,
     "search_ready_selector_override": None,
     "search_ready_min_cards": 10,
+    "quick_apply_selector_override": None,
 }
 
 
@@ -238,6 +239,7 @@ class Settings:
     search_ready_backoff_seconds: float = DEFAULTS["search_ready_backoff_seconds"]
     search_ready_selector_override: str | None = DEFAULTS["search_ready_selector_override"]
     search_ready_min_cards: int = DEFAULTS["search_ready_min_cards"]
+    quick_apply_selector_override: str | None = DEFAULTS["quick_apply_selector_override"]
     # Derived/env
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
@@ -386,6 +388,10 @@ class Settings:
                         processed["search_ready_selector_override"] = str(value)
                     elif subkey == "min_cards":
                         processed["search_ready_min_cards"] = int(value)
+                elif key.startswith("quick_apply."):
+                    _, subkey = key.split(".", 1)
+                    if subkey == "selector_override":
+                        processed["quick_apply_selector_override"] = str(value)
                 elif key.startswith("browser_session_backups."):
                     _, subkey = key.split(".", 1)
                     if subkey == "enabled":
@@ -405,6 +411,11 @@ class Settings:
                 data["search_ready_selector_override"] = str(search_ready_dict["selector_override"])
             if "min_cards" in search_ready_dict and search_ready_dict["min_cards"] is not None:
                 data["search_ready_min_cards"] = int(search_ready_dict["min_cards"])
+        quick_apply_dict = data.pop("quick_apply", {}) or {}
+        if isinstance(quick_apply_dict, dict):
+            override = quick_apply_dict.get("selector_override")
+            if override:
+                data["quick_apply_selector_override"] = str(override)
         if "browser_allowed_domains" in data:
             domains = data["browser_allowed_domains"]
             data["browser_allowed_domains"] = tuple(str(item).strip() for item in domains if str(item).strip())
@@ -422,6 +433,12 @@ class Settings:
             data["search_ready_selector_override"] = str(data["search_ready_selector_override"])
         else:
             data["search_ready_selector_override"] = None
+        if data.get("quick_apply_selector_override"):
+            data["quick_apply_selector_override"] = str(
+                data["quick_apply_selector_override"]
+            )
+        else:
+            data["quick_apply_selector_override"] = None
         data["search_ready_min_cards"] = int(
             data.get("search_ready_min_cards", DEFAULTS["search_ready_min_cards"])
         )

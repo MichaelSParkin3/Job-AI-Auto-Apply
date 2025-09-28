@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import json
 import time
@@ -21,6 +21,7 @@ from apps.browser import (
     SessionBackupManager,
 )
 from apps.preview.runner import run_preview_service
+from sites.simplyhired.quick_apply_discovery import QuickApplyDiscovery
 from sites.simplyhired.search_readiness import SearchReadinessDetector
 from .config_loader import (
     Settings,
@@ -157,6 +158,13 @@ def apply_demo(
 def apply_open(
     search_url: str = typer.Argument(..., help="SimplyHired search URL to open."),
     dry_run: bool = typer.Option(True, "--dry-run/--live", help="Enforce dry-run guardrails."),
+    limit: int = typer.Option(
+        2,
+        "--limit",
+        "-n",
+        min=1,
+        help="Maximum number of Quick Apply openings to stage.",
+    ),
     profile: Optional[str] = typer.Option(None, "--profile", help="Profile identifier to bind."),
     model: Optional[str] = typer.Option(None, "--model", help="Override Browser-Use model."),
     chrome_path: Optional[str] = typer.Option(
@@ -518,6 +526,74 @@ def apply_open(
         )
         raise typer.Exit(code=1)
 
+    quick_apply_selectors_base = (
+        base / "sites" / "simplyhired" / "selectors" / "quick-apply.json"
+    )
+    quick_apply_override_paths: list[Path] = []
+    quick_apply_inline_overrides: list[Mapping[str, Any]] = []
+    qa_selector_override = settings.quick_apply_selector_override
+    if qa_selector_override:
+        qa_path = Path(qa_selector_override)
+        if not qa_path.is_absolute():
+            qa_path = (base / qa_selector_override).resolve()
+        if qa_path.exists():
+            quick_apply_override_paths.append(qa_path)
+        else:
+            log_event(
+                {
+                    "level": "warning",
+                    "event": "quick_apply.selector_missing",
+                    "message": "Configured Quick Apply selector override not found; using base selectors.",
+                    "path": str(qa_path),
+                }
+            )
+    qa_overrides = binding.qa_overrides or {}
+    qa_override_keys = (
+        "quick_apply_selector_override",
+        "quick_apply_selector_file",
+        "quick_apply_selectors",
+    )
+    for key in qa_override_keys:
+        if key not in qa_overrides:
+            continue
+        value = qa_overrides[key]
+        if value is None:
+            continue
+        if isinstance(value, Mapping):
+            quick_apply_inline_overrides.append(value)
+            continue
+        text_value = str(value).strip()
+        if not text_value:
+            continue
+        if text_value.startswith("{"):
+            try:
+                quick_apply_inline_overrides.append(json.loads(text_value))
+            except json.JSONDecodeError as exc:
+                log_event(
+                    {
+                        "level": "warning",
+                        "event": "quick_apply.selector_inline_invalid",
+                        "message": "Failed to parse inline Quick Apply selector override; ignoring.",
+                        "error": str(exc),
+                    }
+                )
+            continue
+        override_path = Path(text_value)
+        if not override_path.is_absolute():
+            override_path = (base / text_value).resolve()
+        if override_path.exists():
+            if override_path not in quick_apply_override_paths:
+                quick_apply_override_paths.append(override_path)
+        else:
+            log_event(
+                {
+                    "level": "warning",
+                    "event": "quick_apply.selector_missing",
+                    "message": "Profile Quick Apply selector override not found; using base selectors.",
+                    "path": str(override_path),
+                }
+            )
+
     readiness_record = None
     try:
         readiness_record = store.start_search_readiness_run(
@@ -758,10 +834,41 @@ def apply_open(
         if backup_summary_payload:
             payload["backups"]["lastBackup"] = backup_summary_payload
             payload["telemetry"]["sessionBackups"]["lastBackup"] = backup_summary_payload
+        payload["limit"] = limit
+
+        if readiness_payload["status"] != "ready":
+            typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+            raise typer.Exit(code=1)
+
+        if not quick_apply_selectors_base.exists():
+            typer.secho(
+                f"Quick Apply selector map not found at {quick_apply_selectors_base}.",
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1)
+
+        discovery_dir = readiness_record.run_dir / "quick-apply"
+        discovery = QuickApplyDiscovery.load(
+            quick_apply_selectors_base,
+            overrides=quick_apply_override_paths,
+            inline_overrides=quick_apply_inline_overrides,
+        )
+        summary = discovery.run(
+            controller,
+            run_dir=discovery_dir,
+            limit=limit,
+        )
+        discovery_payload = summary.to_payload()
+        discovery_payload["selectors"] = {
+            "base": str(quick_apply_selectors_base),
+            "overrides": [str(path) for path in quick_apply_override_paths],
+            "inlineOverrideCount": len(quick_apply_inline_overrides),
+        }
+        store.record_quick_apply_discovery(readiness_record, discovery_payload)
+        payload["discovery"] = discovery_payload
+        payload["telemetry"]["quickApplyDiscovery"] = summary.telemetry_payload()
 
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-        if readiness_payload["status"] != "ready":
-            raise typer.Exit(code=1)
     except (FileNotFoundError, ValueError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
