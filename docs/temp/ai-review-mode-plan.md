@@ -67,21 +67,29 @@
 5. **Phase E — Scheduler/Container:** Build scheduler service/CLI integration, add Docker compatibility, document Task Scheduler/cron usage, and implement daily run automation.
 
 ## 11. Open Questions & Risks
-- What acceptance criteria define “safe to auto submit”? Need thresholds (confidence, employer type) and user-configurable guardrails.
-- Should AI review require dual-model consensus (e.g., LLM + rule-based) to reduce hallucinations? Investigate scoring heuristics vs. single-model decisions.
-- How do we handle CAPTCHA or multi-factor prompts that require human input mid-run in auto mode? Need fallback strategies (pause & notify).
-- Storage of AI prompt/response: do we need encryption-at-rest or local-only ephemeral storage to honor privacy commitments?
-- Scheduler UX: should we embed Windows Task Scheduler export/import now or wait for Dockerization? Need clarity on target deployment timeline.
-- Licensing/compliance: does auto-submitting to SimplyHired violate ToS beyond current manual step? Need legal review.
+- Acceptance criteria for “safe to auto submit” will be based on a configurable confidence level.
+- Full AI mode will rely on a single model; dual-model consensus is not required.
+- For CAPTCHA or multi-factor prompts in auto mode, research will be done on how other browser-automation tools handle this and a fallback strategy (e.g., pause and notify) will be implemented.
+- AI prompt/response data will be stored locally.
+- The scheduler and Docker implementation will be deferred to a later phase.
 
 ## 12. Recommendations for Product & Stakeholders
 - Maintain human review as default; gate AI modes behind explicit profile-level setting with guardrails and documentation of risks.
 - Invest in observability and sandbox testing before enabling unattended submissions; consider canary run mode for limited job categories.
-- Engage legal/compliance review regarding fully automated applications and JD snapshot storage to avoid ToS issues.
+- Legal/compliance review regarding fully automated applications and JD snapshot storage is not required.
 - Prioritize user education: update onboarding, tooltips, and docs to explain difference between human review, AI assist, and full auto modes.
 - Plan for configurable scheduling windows and concurrency caps to prevent spammy behavior.
 
-## 13. Next Steps for Documentation & Code Changes (Future Work)
+## 13. Stealth and Anti-Bot Detection Strategy
+- **Problem:** The `browser-use` library, while powerful for natural language control, does not have built-in features to prevent bot detection. Standard Playwright is easily identified by anti-bot systems.
+- **Research:** A review of available tools confirmed that a stealth plugin is necessary. The primary candidates were `playwright-stealth`, `undetected-chromedriver`, and newer frameworks like `Botright`.
+- **Recommendation:** `playwright-stealth` is the best tool for this project.
+    - It is actively maintained (the `AtuboDad/playwright_stealth` fork).
+    - It integrates directly with the existing Playwright engine used by `browser-use`.
+    - Alternatives would require a major migration (e.g., to Selenium for `undetected-chromedriver`) or a significant rewrite of the automation logic.
+- **Implementation:** The `playwright-stealth` library should be integrated to make the automated browser less detectable. This will be a key dependency for the "Full Auto Mode" to function reliably.
+
+## 14. Next Steps for Documentation & Code Changes (Future Work)
 - Draft PRD updates outlining acceptance criteria for AI decision engine, queue UI, and scheduler features.
 - Update architecture diagrams (system context, workflow sequence) to include decision engine and scheduler components.
 - Prototype decision engine interface in code (without enabling AI auto submit) to validate data flow.
