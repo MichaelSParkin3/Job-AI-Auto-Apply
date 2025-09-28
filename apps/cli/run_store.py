@@ -287,6 +287,28 @@ class RunStore:
         self._write_run_json(record.run_json_path, data)
         return data
 
+    def record_session_backup(
+        self,
+        record: RunRecord,
+        *,
+        enabled: bool,
+        retention: int,
+        last_backup: Dict[str, Any] | None = None,
+        restore: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Persist session backup metadata for the run."""
+
+        data = self._load_run_json(record.run_json_path)
+        session_backup = data.setdefault("sessionBackup", {})
+        session_backup["enabled"] = enabled
+        session_backup["retention"] = retention
+        if restore is not None:
+            session_backup["restore"] = restore
+        if last_backup is not None:
+            session_backup["lastBackup"] = last_backup
+        self._write_run_json(record.run_json_path, data)
+        return data
+
     def load_run_payload(self, record: RunRecord) -> Dict[str, Any]:
         """Return the current run.json payload for the given record."""
 

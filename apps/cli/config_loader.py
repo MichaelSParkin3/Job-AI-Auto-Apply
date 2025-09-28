@@ -28,6 +28,8 @@ DEFAULTS = {
     "browser_allowed_domains": ["*.simplyhired.com"],
     "browser_pacing_wait_jitter_ms": [100, 600],
     "browser_pacing_think_time_range_s": [1.0, 2.0],
+    "browser_session_backups_enabled": True,
+    "browser_session_backups_retention": 2,
     "search_ready_retry_attempts": 1,
     "search_ready_backoff_seconds": 2.0,
     "search_ready_selector_override": None,
@@ -36,6 +38,14 @@ DEFAULTS = {
 
 
 ACTIVE_PROFILE_FILENAME = "active-profile.json"
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def get_base_dir() -> Path:
@@ -222,6 +232,8 @@ class Settings:
     browser_pacing_think_time_range_s: tuple[float, float] = tuple(
         DEFAULTS["browser_pacing_think_time_range_s"]
     )
+    browser_session_backups_enabled: bool = DEFAULTS["browser_session_backups_enabled"]
+    browser_session_backups_retention: int = DEFAULTS["browser_session_backups_retention"]
     search_ready_retry_attempts: int = DEFAULTS["search_ready_retry_attempts"]
     search_ready_backoff_seconds: float = DEFAULTS["search_ready_backoff_seconds"]
     search_ready_selector_override: str | None = DEFAULTS["search_ready_selector_override"]
@@ -307,6 +319,19 @@ class Settings:
                         float(think[0]),
                         float(think[1]),
                     ]
+        backups_dict = data.pop("browser_session_backups", {}) or {}
+        if isinstance(backups_dict, dict):
+            if backups_dict.get("enabled") is not None:
+                data["browser_session_backups_enabled"] = _to_bool(
+                    backups_dict["enabled"]
+                )
+            if backups_dict.get("retention") is not None:
+                try:
+                    data["browser_session_backups_retention"] = int(
+                        backups_dict["retention"]
+                    )
+                except (TypeError, ValueError):
+                    pass
         # CLI overrides last
         if overrides:
             processed: Dict[str, Any] = {}
@@ -361,6 +386,12 @@ class Settings:
                         processed["search_ready_selector_override"] = str(value)
                     elif subkey == "min_cards":
                         processed["search_ready_min_cards"] = int(value)
+                elif key.startswith("browser_session_backups."):
+                    _, subkey = key.split(".", 1)
+                    if subkey == "enabled":
+                        processed["browser_session_backups_enabled"] = _to_bool(value)
+                    elif subkey == "retention":
+                        processed["browser_session_backups_retention"] = int(value)
                 else:
                     processed[key] = value
             data.update(processed)
@@ -393,6 +424,21 @@ class Settings:
             data["search_ready_selector_override"] = None
         data["search_ready_min_cards"] = int(
             data.get("search_ready_min_cards", DEFAULTS["search_ready_min_cards"])
+        )
+        data["browser_session_backups_enabled"] = _to_bool(
+            data.get(
+                "browser_session_backups_enabled",
+                DEFAULTS["browser_session_backups_enabled"],
+            )
+        )
+        data["browser_session_backups_retention"] = max(
+            1,
+            int(
+                data.get(
+                    "browser_session_backups_retention",
+                    DEFAULTS["browser_session_backups_retention"],
+                )
+            ),
         )
         return cls(**data)
 

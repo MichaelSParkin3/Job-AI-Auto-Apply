@@ -38,6 +38,8 @@ class ProfileBinding:
     qa_overrides: Dict[str, str]
     model_overrides: Dict[str, Any]
     browser_overrides: Dict[str, Any]
+    session_backups_enabled: bool | None
+    session_backups_retention: int | None
     resume_exists: bool
     errors: List[Dict[str, Any]]
 
@@ -62,6 +64,10 @@ class ProfileBinding:
             "qa_overrides": dict(self.qa_overrides),
             "model_overrides": dict(self.model_overrides),
             "browser": dict(self.browser_overrides),
+            "session_backups": {
+                "enabled": self.session_backups_enabled,
+                "retention": self.session_backups_retention,
+            },
             "errors": [dict(error) for error in self.errors],
         }
 
@@ -78,6 +84,10 @@ class ProfileBinding:
             "qaOverrideKeys": sorted(self.qa_overrides.keys()),
             "model": self.model_overrides.get("llm"),
             "browser": dict(self.browser_overrides),
+            "sessionBackups": {
+                "enabled": self.session_backups_enabled,
+                "retention": self.session_backups_retention,
+            },
         }
 
     def list_payload(self, *, active: bool) -> Dict[str, Any]:
@@ -107,6 +117,12 @@ class ProfileBinding:
             qa_overrides=dict(profile.qa_overrides),
             model_overrides=dict(profile.model_overrides),
             browser_overrides=profile.resolved_browser_overrides(),
+            session_backups_enabled=profile.session_backups.enabled
+            if profile.session_backups
+            else None,
+            session_backups_retention=profile.session_backups.retention
+            if profile.session_backups
+            else None,
             resume_exists=result.resume_exists,
             errors=[dict(error) for error in result.errors],
         )
@@ -125,6 +141,8 @@ class ProfileBinding:
             qa_overrides={},
             model_overrides={},
             browser_overrides={},
+            session_backups_enabled=None,
+            session_backups_retention=None,
             resume_exists=resume_path.exists(),
             errors=[],
         )
@@ -233,6 +251,21 @@ class BrowserOverridesConfig(BaseModel):
         return self
 
 
+class SessionBackupConfig(BaseModel):
+    """Optional session backup overrides stored on the profile."""
+
+    enabled: bool | None = Field(default=None, description="Enable session backups")
+    retention: int | None = Field(default=None, description="Maximum backups to keep")
+
+    model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="after")
+    def validate_retention(self) -> "SessionBackupConfig":
+        if self.retention is not None and self.retention < 1:
+            raise ValueError("session_backups.retention must be >= 1")
+        return self
+
+
 class ProfileConfig(BaseModel):
     """Pydantic model representing a profile configuration."""
 
@@ -252,6 +285,11 @@ class ProfileConfig(BaseModel):
         default=None,
         alias="browser",
         description="Browser-Use overrides for this profile",
+    )
+    session_backups: SessionBackupConfig | None = Field(
+        default=None,
+        alias="session_backups",
+        description="Session backup overrides",
     )
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")

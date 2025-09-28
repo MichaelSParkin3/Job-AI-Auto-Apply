@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
 
@@ -14,8 +15,10 @@ import typer
 from apps.browser import (
     BrowserActionStatus,
     BrowserLaunchConfig,
+    BrowserLaunchError,
     BrowserUseController,
     BrowserUseError,
+    SessionBackupManager,
 )
 from apps.preview.runner import run_preview_service
 from sites.simplyhired.search_readiness import SearchReadinessDetector
@@ -161,6 +164,11 @@ def apply_open(
         "--chrome-path",
         help="Override Chrome executable path for this session.",
     ),
+    session_backups: Optional[bool] = typer.Option(
+        None,
+        "--session-backups/--no-session-backups",
+        help="Enable or disable Browser-Use session backups for this run.",
+    ),
 ):
     """Launch Browser-Use with stealth defaults and open the provided URL."""
 
@@ -171,6 +179,8 @@ def apply_open(
         overrides["browser.model"] = model
     if chrome_path:
         overrides["chrome_path"] = chrome_path
+    if session_backups is not None:
+        overrides["browser_session_backups.enabled"] = session_backups
     settings = Settings.load(overrides=overrides)
     base = get_base_dir()
     ensure_runtime_dirs(base)
@@ -219,6 +229,38 @@ def apply_open(
     user_data_dir = binding.user_data_dir
 
     user_data_dir.mkdir(parents=True, exist_ok=True)
+
+    backups_enabled = settings.browser_session_backups_enabled
+    if binding.session_backups_enabled is not None:
+        backups_enabled = binding.session_backups_enabled
+    backups_retention = settings.browser_session_backups_retention
+    if binding.session_backups_retention is not None:
+        try:
+            backups_retention = max(1, int(binding.session_backups_retention))
+        except (TypeError, ValueError):
+            backups_retention = settings.browser_session_backups_retention
+
+    backup_manager = SessionBackupManager(
+        base=base,
+        enabled=backups_enabled,
+        retention=backups_retention,
+    )
+    restore_summary_payload: dict[str, Any] | None = None
+    backup_summary_payload: dict[str, Any] | None = None
+
+    def detect_session_corruption(directory: Path) -> tuple[bool, str]:
+        if not directory.exists():
+            return True, "missing_session_dir"
+        preferences = directory / "Preferences"
+        if not preferences.exists():
+            return True, "missing_preferences"
+        singleton_lock = directory / "SingletonLock"
+        if singleton_lock.exists():
+            return True, "singleton_lock_present"
+        legacy_lock = directory / "LOCK"
+        if legacy_lock.exists():
+            return True, "lock_present"
+        return False, ""
 
     viewport_override = browser_overrides.get("viewport", {}) if browser_overrides else {}
     profile_model = browser_overrides.get("model") if browser_overrides else None
@@ -374,10 +416,38 @@ def apply_open(
     )
 
     controller = BrowserUseController(launch_config)
+    restore_attempted = False
+
+    def attempt_open() -> Any:
+        nonlocal controller, restore_attempted, restore_summary_payload
+        while True:
+            try:
+                return controller.open_url(search_url)
+            except BrowserUseError as exc:
+                corrupted, reason = detect_session_corruption(user_data_dir)
+                should_restore = not restore_attempted and (
+                    isinstance(exc, BrowserLaunchError) or corrupted
+                )
+                if not should_restore:
+                    raise
+                summary = backup_manager.restore_latest(
+                    profile_id,
+                    user_data_dir,
+                    run_id=None,
+                )
+                restore_summary_payload = summary.to_payload()
+                restore_summary_payload["detectedReason"] = reason or "launch_error"
+                restore_attempted = True
+                if summary.status != "restored":
+                    raise
+                controller = BrowserUseController(launch_config)
+
     try:
-        result = controller.open_url(search_url)
+        result = attempt_open()
     except BrowserUseError as exc:
         typer.secho(f"Failed to launch Browser-Use: {exc}", fg=typer.colors.RED)
+        if restore_summary_payload:
+            typer.echo(json.dumps({"restore": restore_summary_payload}, ensure_ascii=False))
         raise typer.Exit(code=1) from exc
 
     if result.status is BrowserActionStatus.ERROR:
@@ -409,6 +479,17 @@ def apply_open(
             },
         },
         "profile": binding.cli_payload(),
+    }
+    payload["backups"] = {
+        "enabled": backup_manager.is_enabled,
+        "retention": backups_retention,
+        "restoreAttempt": restore_summary_payload,
+    }
+    telemetry_payload = payload.setdefault("telemetry", {})
+    telemetry_payload["sessionBackups"] = {
+        "enabled": backup_manager.is_enabled,
+        "retention": backups_retention,
+        "restoreAttempt": restore_summary_payload,
     }
 
     store = RunStore(base=base)
@@ -461,6 +542,8 @@ def apply_open(
         failure_reason: str | None = None
         start_time = time.monotonic()
         total_attempts = 1 + readiness_retry_attempts
+        backup_executor: ThreadPoolExecutor | None = None
+        backup_future = None
 
         for attempt in range(1, total_attempts + 1):
             idle_result = controller.wait_for_idle(timeout=5.0)
@@ -580,6 +663,21 @@ def apply_open(
                     "artifactHtml": attempts_payload[-1]["artifact"],
                 }
             )
+            if backup_manager.is_enabled:
+                backup_executor = ThreadPoolExecutor(max_workers=1)
+                backup_future = backup_executor.submit(
+                    backup_manager.create_backup,
+                    profile_id,
+                    user_data_dir,
+                    readiness_record.id,
+                )
+            else:
+                summary = backup_manager.create_backup(
+                    profile_id,
+                    user_data_dir,
+                    run_id=readiness_record.id,
+                )
+                backup_summary_payload = summary.to_payload()
         else:
             job_cards = last_result.job_card_count if last_result else 0
             detail_found = last_result.detail_found if last_result else False
@@ -627,6 +725,25 @@ def apply_open(
         )
         store.record_search_readiness(readiness_record, readiness_payload)
 
+        if backup_future:
+            try:
+                summary = backup_future.result()
+                backup_summary_payload = summary.to_payload()
+            finally:
+                if backup_executor:
+                    backup_executor.shutdown(wait=False)
+
+        if readiness_record and restore_summary_payload and "runId" not in restore_summary_payload:
+            restore_summary_payload["runId"] = readiness_record.id
+
+        store.record_session_backup(
+            readiness_record,
+            enabled=backup_manager.is_enabled,
+            retention=backups_retention,
+            last_backup=backup_summary_payload,
+            restore=restore_summary_payload,
+        )
+
         payload["run"] = {
             "id": readiness_record.id,
             "artifactsDir": str(readiness_record.run_dir),
@@ -638,6 +755,9 @@ def apply_open(
             "durationSeconds": duration,
             "variant": readiness_payload.get("variant"),
         }
+        if backup_summary_payload:
+            payload["backups"]["lastBackup"] = backup_summary_payload
+            payload["telemetry"]["sessionBackups"]["lastBackup"] = backup_summary_payload
 
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         if readiness_payload["status"] != "ready":

@@ -61,10 +61,13 @@ def test_profile_binding_payloads(tmp_path: Path):
         "phone": "+1-555-0000",
         "about": "This is a test biography",
     }
+    assert cli_payload["session_backups"]["enabled"] is None
+    assert cli_payload["session_backups"]["retention"] is None
     assert telemetry_payload["qaOverrideKeys"] == ["about", "phone"]
     assert "qa_overrides" not in telemetry_payload
     assert telemetry_payload["resume"]["exists"] is True
     assert telemetry_payload["browser"]["allowed_domains"] == ["*.simplyhired.com"]
+    assert telemetry_payload["sessionBackups"]["enabled"] is None
 
 
 def test_profile_binding_demo_fallback(tmp_path: Path):
@@ -72,3 +75,4 @@ def test_profile_binding_demo_fallback(tmp_path: Path):
     assert binding.profile_id == "demo"
     assert binding.resume_exists is False
     assert binding.cli_payload()["valid"] is False
+    assert binding.cli_payload()["session_backups"]["enabled"] is None

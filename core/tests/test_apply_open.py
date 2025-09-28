@@ -6,6 +6,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 sys.path.insert(0, os.getcwd())
+from apps.browser import BrowserLaunchError, SessionBackupManager
 from apps.cli.main import app
 
 
@@ -185,6 +186,18 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
     run_dir = Path(payload["run"]["artifactsDir"])
     run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert run_json["status"] == "search_ready"
+    backups = payload["backups"]
+    assert backups["enabled"] is True
+    assert backups["retention"] == 2
+    assert backups["restoreAttempt"] is None
+    last_backup = backups["lastBackup"]
+    assert last_backup["status"] == "created"
+    assert Path(last_backup["path"]).exists()
+    session_backup = run_json["sessionBackup"]
+    assert session_backup["enabled"] is True
+    assert session_backup["retention"] == 2
+    assert session_backup["lastBackup"]["status"] == "created"
+    assert session_backup.get("restore") is None
 
     config = captured_config["config"]
     assert str(config.user_data_dir).endswith("frontend-dev")
@@ -277,6 +290,13 @@ def test_apply_open_readiness_failure_records_artifacts(tmp_path: Path, monkeypa
     run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert run_json["status"] == "search_unready"
     assert run_json["readiness"]["status"] == "unready"
+    backups = payload["backups"]
+    assert backups["enabled"] is True
+    assert backups["restoreAttempt"] is None
+    assert "lastBackup" not in backups
+    session_backup = run_json["sessionBackup"]
+    assert session_backup["enabled"] is True
+    assert "lastBackup" not in session_backup
 
 
 def test_apply_open_switch_profiles_isolated(tmp_path: Path, monkeypatch):
@@ -352,3 +372,93 @@ def test_apply_open_switch_profiles_isolated(tmp_path: Path, monkeypatch):
     assert first_config.profile_binding["id"] == "frontend-dev"
     assert second_config.profile_binding["id"] == "data-analyst"
     assert first_config.user_data_dir != second_config.user_data_dir
+
+
+def test_apply_open_restores_session_on_launch_error(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    _prepare_search_selectors(tmp_path)
+    _bootstrap_profile(tmp_path, profile_id="frontend-dev")
+
+    session_dir = tmp_path / ".local" / "browser" / "profiles" / "frontend-dev"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "Preferences").write_text("{}", encoding="utf-8")
+    manager = SessionBackupManager(tmp_path, enabled=True, retention=2)
+    manager.create_backup("frontend-dev", session_dir, run_id="seed-run")
+    (session_dir / "Preferences").unlink()
+
+    baseline_html = _load_fixture("baseline.html")
+    attempts = {"count": 0}
+
+    def factory(config):
+        if attempts["count"] == 0:
+            attempts["count"] += 1
+            raise BrowserLaunchError("corrupt profile")
+        attempts["count"] += 1
+        return RecordingClient(snapshots=[baseline_html])
+
+    monkeypatch.setattr("apps.browser.controller.create_browser_client", factory)
+    monkeypatch.setattr("apps.cli.main.time.sleep", lambda *_args, **_kwargs: None)
+
+    result_use = runner.invoke(app, ["profiles", "use", "frontend-dev"], color=False)
+    assert result_use.exit_code == 0
+
+    result = runner.invoke(app, ["apply", "open", "https://example.com/search?q=python"], color=False)
+    assert result.exit_code == 0, result.stdout
+    payload = _parse_last_json(result.stdout)
+
+    assert attempts["count"] >= 2
+    restore_attempt = payload["backups"]["restoreAttempt"]
+    assert restore_attempt["status"] == "restored"
+    assert restore_attempt["detectedReason"] in {"missing_preferences", "launch_error"}
+    last_backup = payload["backups"]["lastBackup"]
+    assert last_backup["status"] == "created"
+
+    run_dir = Path(payload["run"]["artifactsDir"])
+    run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    session_backup = run_json["sessionBackup"]
+    assert session_backup["restore"]["status"] == "restored"
+    assert session_backup["lastBackup"]["status"] == "created"
+
+
+def test_apply_open_backup_disabled_skips(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    _prepare_search_selectors(tmp_path)
+    _bootstrap_profile(tmp_path, profile_id="frontend-dev")
+
+    baseline_html = _load_fixture("baseline.html")
+
+    def factory(config):
+        return RecordingClient(snapshots=[baseline_html])
+
+    monkeypatch.setattr("apps.browser.controller.create_browser_client", factory)
+    monkeypatch.setattr("apps.cli.main.time.sleep", lambda *_args, **_kwargs: None)
+
+    result_use = runner.invoke(app, ["profiles", "use", "frontend-dev"], color=False)
+    assert result_use.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "apply",
+            "open",
+            "https://example.com/search?q=python",
+            "--no-session-backups",
+        ],
+        color=False,
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = _parse_last_json(result.stdout)
+
+    backups = payload["backups"]
+    assert backups["enabled"] is False
+    last_backup = backups["lastBackup"]
+    assert last_backup["status"] == "skipped"
+    assert last_backup["reason"] == "disabled"
+
+    run_dir = Path(payload["run"]["artifactsDir"])
+    run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    session_backup = run_json["sessionBackup"]
+    assert session_backup["enabled"] is False
+    assert session_backup["lastBackup"]["status"] == "skipped"
+    backups_dir = tmp_path / ".local" / "browser" / "backups" / "frontend-dev"
+    assert not backups_dir.exists()

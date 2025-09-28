@@ -133,6 +133,8 @@ python app.py apply open "https://www.simplyhired.com/search?q=python" \
 
 The command resolves the Chrome `user_data_dir` to `.local/browser/profiles/<profile>`, honors overrides from `config/config.yaml` or `data/profiles/<id>.yaml`, and returns a JSON payload with the session identifier plus a `profile` object describing the active binding (resume path, QA overrides, guardrails). If the selected profile fails validation or the resume PDF is missing, the CLI exits with `profiles.validation_failed` before launching Chrome. Dry-run mode continues to fall back to the `demo` profile only when no active profile is configured.
 
+After the search readiness check succeeds the CLI now snapshots the resolved session directory to `.local/browser/backups/<profile>/` and records the result under the `backups` key in the JSON response. Restores run automatically when Chrome launch detects a corrupted profile (e.g., missing `Preferences`), retrying exactly once before surfacing an error. Operators can opt out per run with `--session-backups/--no-session-backups` or by setting `browser_session_backups.enabled` in the global/profile config files. Run metadata (`runs/<id>/run.json`) keeps the same `sessionBackup` structure so history tooling can inspect the latest snapshot and any restore attempts.
+
 #### Stealth Guardrails & Pacing
 - **Domain allowlist** – navigation is limited to the configured domains (`browser.allowed_domains`). Profile YAML can append additional domains per-identity.
 - **Single-tab enforcement** – attempts to spawn a new tab/window are blocked and logged as `guardrail.browser.NEW_TAB_ATTEMPT` events.
