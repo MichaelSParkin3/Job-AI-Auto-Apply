@@ -24,6 +24,7 @@ from apps.preview.runner import run_preview_service
 from sites.simplyhired.form_mapper import FormFillPlan, FormSelectorLibrary, FormStructureMapper
 from sites.simplyhired.form_filler import FormFillExecutor
 from sites.simplyhired.quick_apply_discovery import QuickApplyDiscovery
+from sites.simplyhired.resume_uploader import ResumeUploader
 from sites.simplyhired.search_readiness import SearchReadinessDetector
 from .config_loader import (
     Settings,
@@ -1045,6 +1046,56 @@ def apply_open(
                     search_url=search_url,
                     summary=telemetry_summary,
                     dry_run=dry_run,
+                )
+
+            resume_field = None
+            for step in plan_to_fill.steps:
+                for field in step.mapped:
+                    profile_key = field.profile_field.lower()
+                    widget = field.widget_type.lower()
+                    if "resume" in profile_key or widget == "file":
+                        resume_field = field
+                        break
+                if resume_field:
+                    break
+
+            if resume_field and readiness_record:
+                step_lookup = {step.step_id: step.title for step in plan_to_fill.steps}
+                uploader = ResumeUploader(
+                    controller,
+                    resume_path=binding.resume_path,
+                    dry_run=dry_run,
+                    run_dir=readiness_record.run_dir,
+                    step_lookup=step_lookup,
+                )
+                resume_result = uploader.upload(
+                    selector=resume_field.selector,
+                    step_id=resume_field.step,
+                )
+                resume_payload = resume_result.to_payload()
+                payload["resumeUpload"] = resume_payload
+                payload["telemetry"]["resumeUpload"] = resume_result.telemetry_payload()
+                store.record_resume_upload(readiness_record, resume_payload)
+                typer.echo(
+                    "Resume upload: "
+                    f"{resume_result.status} (attempts={resume_result.attempts}, simulated={resume_result.simulated})"
+                )
+                if context:
+                    history_writer.append_resume_upload(
+                        context,
+                        profile_id=profile_id,
+                        search_url=search_url,
+                        summary=resume_payload,
+                        dry_run=dry_run,
+                    )
+            elif binding.resume_path and readiness_record:
+                log_event(
+                    {
+                        "level": "warning",
+                        "event": "resume.upload.skipped",
+                        "reason": "selector_missing",
+                        "profileId": profile_id,
+                    }
                 )
 
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))

@@ -1,0 +1,37 @@
+schema: 1
+story: '3.4'
+story_title: 'Deterministic Resume Upload'
+gate: PASS
+status_reason: 'Resume uploader pytest suite executes successfully with portalocker installed; collection error resolved and controller upload coverage runs under the documented filter.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-10-30T00:00:00Z'
+
+top_issues: []
+
+waiver:
+  active: false
+
+quality_score: 91
+expires: '2025-11-12T00:00:00Z'
+
+evidence:
+  tests_reviewed: 2
+  risks_identified: 2
+  trace:
+    ac_covered: [1, 2, 3, 4, 5]
+    ac_gaps: []
+    notes: 'pytest core/tests/test_resume_uploader.py validates happy path, retry failure, and dry-run flows while pytest core/tests/test_browser_controller.py -k upload exercises the controller primitive with telemetry checks.'
+
+nfr_validation:
+  _assessed: [reliability, maintainability]
+  reliability:
+    status: PASS
+    notes: 'Uploader tests now cover confirmation, retry diagnostics, and dry-run semantics with no collection errors.'
+  maintainability:
+    status: PASS
+    notes: 'Portalocker is installed via dev extras during QA setup; controller upload tests match the documented filter to prevent accidental skips.'
+
+recommendations:
+  immediate: []
+  future:
+    - 'Add CI lint/check to fail on missing standard-library imports so regression is caught earlier.'

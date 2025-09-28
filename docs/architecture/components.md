@@ -46,6 +46,17 @@
 - `python app.py apply open` persists a `formFill` payload to `runs/<id>/run.json` / `history.jsonl` so reviewers can track
   filled vs skipped counts per step. CLI output prints a per-step summary table for quick inspection.
 
+### Resume Upload Pipeline (Story 3.4)
+- `apps/browser/controller.BrowserUseController` adds an `upload_file` primitive that wraps Playwright's deterministic
+  file chooser. It redacts file metadata (name, SHA-256, size), emits `UPLOAD_*` telemetry, honours think-time pacing,
+  and surfaces guarded error details for retries without leaking the absolute path.
+- `sites/simplyhired.resume_uploader.ResumeUploader` orchestrates profile resume resolution, invokes the controller
+  primitive, confirms DOM attachment via `get_field_state(..., widget_type="file")`, and retries once using guardrail
+  jitter before capturing a focused HTML snapshot on failure.
+- Successful uploads persist a redacted summary to `run.json` (`resumeUpload`), append a history entry, and echo a concise
+  CLI status line (attempts + simulated flag). Failures capture artifacts under `runs/<id>/resume/` and bubble structured
+  diagnostics back to QA for investigation.
+
 ## Artifact & History Store
 **Responsibility:** Persist screenshots, `run.json`, HTML snapshot, redacted `actions.log`, append `history.jsonl`.
 

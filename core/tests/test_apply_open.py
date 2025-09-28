@@ -15,6 +15,7 @@ except ModuleNotFoundError:  # pragma: no cover - executed only when typer missi
 sys.path.insert(0, os.getcwd())
 from apps.browser import BrowserLaunchError, SessionBackupManager
 from apps.cli.main import app
+from sites.simplyhired.form_mapper import FormFillPlanField, FormStructureMapper
 
 
 runner = CliRunner()
@@ -155,6 +156,7 @@ class RecordingClient:
         self.radio_calls: list[tuple[str, str]] = []
         self.checkbox_calls: list[tuple[str, bool]] = []
         self.state_calls: list[tuple[str, str]] = []
+        self.upload_calls: list[tuple[str, tuple[str, ...]]] = []
         self._field_values: dict[str, str] = {}
         self._checkbox_states: dict[str, bool] = {}
 
@@ -216,7 +218,21 @@ class RecordingClient:
         if widget_type == "radio":
             value = self._field_values.get(selector, "")
             return {"result": {"ok": True, "value": value, "checked": bool(value)}}
+        if widget_type == "file":
+            files = []
+            if self.upload_calls:
+                files = [
+                    {"name": Path(path).name, "size": 1024}
+                    for path in self.upload_calls[-1][1]
+                ]
+            return {"result": {"ok": True, "files": files, "count": len(files)}}
         return {"result": {"ok": False, "reason": "unsupported"}}
+
+    def set_input_files(self, selector: str, paths: tuple[str, ...] | list[str]) -> dict[str, Any]:
+        normalized = tuple(paths)
+        self.upload_calls.append((selector, normalized))
+        files = [{"name": Path(path).name, "size": 1024} for path in normalized]
+        return {"result": {"ok": True, "files": files}}
 
 
 def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
@@ -238,6 +254,33 @@ def test_apply_open_uses_profile_overrides(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr("apps.browser.controller.create_browser_client", factory)
     monkeypatch.setattr("apps.cli.main.time.sleep", lambda *_args, **_kwargs: None)
+
+    original_generate = FormStructureMapper.generate_plan
+
+    def generate_with_resume(self):
+        plan = original_generate(self)
+        if plan.steps:
+            first_step = plan.steps[0]
+            first_step.mapped.append(
+                FormFillPlanField(
+                    profile_field="documents.resume_path",
+                    step=first_step.step_id,
+                    selector="input.resume-upload",
+                    widget_type="file",
+                    required=True,
+                    label="Resume",
+                    confidence=1.0,
+                    options=[],
+                    diagnostics={},
+                )
+            )
+        return plan
+
+    monkeypatch.setattr(
+        FormStructureMapper,
+        "generate_plan",
+        generate_with_resume,
+    )
 
     result_use = runner.invoke(app, ["profiles", "use", "frontend-dev"], color=False)
     assert result_use.exit_code == 0
@@ -442,6 +485,13 @@ def test_apply_open_runs_quick_apply_discovery(tmp_path: Path, monkeypatch):
     assert form_fill["summary"]["artifacts"] == 1
     assert "filledFields" in form_fill["summary"]
     assert payload["telemetry"]["formFill"]["artifacts"] == 1
+
+    resume_payload = payload["resumeUpload"]
+    assert resume_payload["step"]
+    assert resume_payload["file"]["name"].endswith("resume.pdf")
+    resume_telemetry = payload["telemetry"]["resumeUpload"]
+    assert resume_telemetry["status"] == resume_payload["status"]
+    assert resume_telemetry["confirmationCount"] >= 0
 
     client = captured["client"]
     selectors_clicked = [call[0] for call in client.safe_click_calls]

@@ -27,6 +27,7 @@ class StubClient:
         self.radio_calls: list[tuple[str, str]] = []
         self.checkbox_calls: list[tuple[str, bool]] = []
         self.state_calls: list[tuple[str, str]] = []
+        self.upload_calls: list[tuple[str, tuple[str, ...]]] = []
 
     def open_url(self, url: str) -> dict[str, str]:
         self.open_calls.append(url)
@@ -62,7 +63,26 @@ class StubClient:
 
     def get_field_state(self, selector: str, widget_type: str) -> dict[str, Any]:
         self.state_calls.append((selector, widget_type))
+        if widget_type == "file":
+            return {
+                "result": {
+                    "ok": True,
+                    "files": [
+                        {
+                            "name": "resume.pdf",
+                            "size": 2048,
+                        }
+                    ],
+                    "count": 1,
+                }
+            }
         return {"result": {"ok": True, "value": "example", "empty": False}}
+
+    def set_input_files(self, selector: str, paths: tuple[str, ...] | list[str]) -> dict[str, Any]:
+        normalized = tuple(paths)
+        self.upload_calls.append((selector, normalized))
+        files = [{"name": Path(path).name, "size": 1024} for path in normalized]
+        return {"result": {"ok": True, "files": files}}
 
 
 def build_guardrails(events: list[dict[str, Any]]) -> NavigationGuardrails:
@@ -75,7 +95,7 @@ def build_guardrails(events: list[dict[str, Any]]) -> NavigationGuardrails:
     )
 
 
-def test_browser_controller_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_browser_controller_upload_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     events: list[dict[str, Any]] = []
 
     def fake_log(event: dict[str, Any]) -> None:
@@ -138,6 +158,14 @@ def test_browser_controller_success(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
     state_result = controller.get_field_state("input.name", "text")
     assert state_result.details["state"]["ok"] is True
+
+    resume_path = tmp_path / "resume.pdf"
+    resume_path.write_bytes(b"%PDF-1.4\n")
+    upload_result = controller.upload_file("input.resume", resume_path)
+    assert upload_result.status is BrowserActionStatus.OK
+    assert upload_result.details["response"]["file"]["name"] == "resume.pdf"
+    assert captured["client"].upload_calls == [("input.resume", (str(resume_path),))]
+    assert upload_result.telemetry["event"] == "UPLOAD_COMPLETED"
 
     guardrail_events = [evt for evt in events if evt.get("event", "").startswith("guardrail.browser")]
     assert any(evt["event"] == "guardrail.browser.NAVIGATE" for evt in guardrail_events)

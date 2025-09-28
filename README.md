@@ -183,6 +183,17 @@ After the search readiness check succeeds the CLI now snapshots the resolved ses
   matching history entry so review tooling can track filled vs skipped counts over time.
 - **Structured telemetry** – navigation, tab suppression, pacing waits, and think-time pauses stream through the `log_event` pipeline so `actions.log` and downstream tooling can observe guardrail posture.
 
+#### Resume Upload (Story 3.4)
+- `BrowserUseController.upload_file` triggers the Playwright file chooser deterministically, redacts file metadata (name,
+  size, SHA-256), and emits `UPLOAD_STARTED`/`UPLOAD_COMPLETED`/`UPLOAD_FAILED` events. Dry-run mode simulates the chooser
+  without touching disk while still exercising telemetry paths.
+- `ResumeUploader` validates the configured profile resume, invokes the controller primitive, confirms DOM attachment via
+  `get_field_state(..., widget_type="file")`, and retries once with guardrail jitter before capturing an HTML artifact on
+  persistent failure.
+- Successful runs append a `resumeUpload` block to `runs/<id>/run.json`, record a history entry, and print a one-line CLI
+  summary (status, attempt count, simulated flag). Failures write redacted diagnostics plus an HTML snapshot to
+  `runs/<id>/resume/` for QA review.
+
 ### Tests
 ```bash
 pytest -q
