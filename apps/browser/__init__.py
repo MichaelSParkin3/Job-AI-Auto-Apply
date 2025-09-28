@@ -7,6 +7,7 @@ from .controller import (
     BrowserActionResult,
     BrowserActionStatus,
     BrowserUseError,
+    ReviewArtifactCapture,
 )
 from .guardrails import NavigationGuardrails
 from .session_backup import SessionBackupManager
@@ -18,6 +19,7 @@ __all__ = [
     "BrowserActionResult",
     "BrowserActionStatus",
     "BrowserUseError",
+    "ReviewArtifactCapture",
     "NavigationGuardrails",
     "SessionBackupManager",
 ]
