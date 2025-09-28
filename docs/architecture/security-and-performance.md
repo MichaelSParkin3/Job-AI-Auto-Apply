@@ -10,6 +10,8 @@
 - Input Validation: pydantic models for all API routes
 - Rate Limiting: Not required (local); guard against rapid repeat actions
 - CORS: Same‑origin only
+- AI Mode Opt-In: Auto review and auto submit require profile-level consent; CLI refuses to start AI modes unless `profiles/<id>.yaml` sets `automation.allow_auto=true`.
+- Prompt Redaction: Store AI prompts/responses encrypted-at-rest (local key) with hashes in logs; redact JD snippets beyond 500 characters.
 
 **Authentication Security**
 - OpenRouter: Key from `.env.local`; never persisted in artifacts
@@ -25,5 +27,6 @@
 - Response Time Target: Preview API ≤ 50ms p50
 - Database Optimization: N/A (file I/O); minimize sync blocking
 - Caching: In‑process memo for small lookups
+- Decision Engine SLA: AI decisions should complete within 8s p95; queue watchdog escalates items exceeding 30s without response.
 
 ---

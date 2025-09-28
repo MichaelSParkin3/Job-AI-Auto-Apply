@@ -4,17 +4,17 @@
 **Responsibility:** Parse args, load config/profile, coordinate browser actions, manage artifacts/history.
 
 **Key Interfaces:**
-- Commands: `apply`, `profiles`, `config`, `history`
-- IPC/HTTP calls to Preview server
+- Commands: `apply`, `profiles`, `config`, `history`, `scheduler plan`, `scheduler run`
+- IPC/HTTP calls to Preview server and Decision Engine protocol
 
-**Dependencies:** Config loader, Profile manager, Browser‑Use wrapper, Artifact store
+**Dependencies:** Config loader, Profile manager, Browser‑Use wrapper, Decision Engine, Artifact store
 
 **Technology Stack:** Python 3.11, Typer
 
 ## Preview Server (BFF)
-**Responsibility:** Serve UI, provide preview control endpoints, enforce guardrails.
+**Responsibility:** Serve UI, provide preview/queue control endpoints, enforce guardrails.
 
-**Key Interfaces:** `/api/run/*`, `/ui/*`
+**Key Interfaces:** `/api/run/*`, `/api/queue/*`, `/ui/*`
 
 **Dependencies:** File repository, redaction utilities
 
@@ -28,7 +28,7 @@
 **Dependencies:** Playwright, model driver (OpenRouter key)
 
 **Implementation Notes:**
-- The `BrowserUseController` lives in `apps/browser/controller.py` and wraps the upstream Browser-Use session with strongly typed primitives (`open_url`, `wait_for_idle`, `safe_click`).
+- The `BrowserUseController` lives in `apps/browser/controller.py` and wraps the upstream Browser-Use session with strongly typed primitives (`open_url`, `wait_for_idle`, `safe_click`). It also exports `capture_review_artifacts` for the decision engine (screenshots, DOM plans, extracted summaries).
 - Configuration is resolved via `Settings` + profile overrides; Chrome sessions persist to `.local/browser/profiles/<profile>` and enforce a 1366×768 default viewport (overridable per profile).
 - `python app.py apply open` bootstraps the controller, logs guardrail events, and returns a JSON session handle for follow-on automation stories.
 - Guardrails: `NavigationGuardrails` blocks off-allowlist URLs, suppresses multi-tab attempts, emits jittered pacing/think-time waits, and records structured telemetry (`guardrail.browser.*`) for downstream run-store ingestion.
@@ -38,7 +38,7 @@
 ## Artifact & History Store
 **Responsibility:** Persist screenshots, `run.json`, HTML snapshot, redacted `actions.log`, append `history.jsonl`.
 
-**Key Interfaces:** `save_run(run)`, `append_history(entry)`, `housekeep(retentionDays)`
+**Key Interfaces:** `save_run(run)`, `append_history(entry)`, `housekeep(retentionDays)`, `record_decision(decision)`
 
 **Dependencies:** Windows filesystem
 
@@ -52,6 +52,33 @@
 **Dependencies:** Hashing, history/history.jsonl
 
 **Technology Stack:** Python utility module
+
+## Decision Engine
+**Responsibility:** Evaluate each `ApplicationCandidate` and return a structured decision with rationale and confidence.
+
+**Key Interfaces:** `decide(candidate) -> SubmissionDecision`, `record_feedback(decisionId, override)`
+
+**Dependencies:** Profile policy (mode/thresholds), Browser-Use artifacts, OpenRouter model client, preview event bus
+
+**Technology Stack:** Python async worker (LLM), FastAPI binding (human)
+
+## Review Queue Manager
+**Responsibility:** Maintain ordered backlog of candidates, track state transitions, expose APIs for UI/AI schedulers, and trigger fallbacks when SLA breached.
+
+**Key Interfaces:** `enqueue(candidate)`, `peek(mode)`, `update(decision)`, `list(filter)`
+
+**Dependencies:** File-backed store for persistence, Decision Engine observers
+
+**Technology Stack:** Python queue module with persisted snapshots
+
+## Scheduler Adapter (Future Epic)
+**Responsibility:** Produce OS-native schedules and monitor unattended runs.
+
+**Key Interfaces:** `plan(profile, searchUrl, time, mode)`, `status(runId)`
+
+**Dependencies:** CLI orchestrator, Windows Task Scheduler / cron invocation layer
+
+**Technology Stack:** Python CLI utilities, optional PowerShell templates
 
 ```mermaid
 C4Container

@@ -11,12 +11,13 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
   "$id": "urn:schema:run-record:1-0-0",
   "title": "RunRecord",
   "type": "object",
-  "required": ["id", "startedAt", "profileId", "posting", "artifactsDir", "logsPath", "status"],
+  "required": ["id", "startedAt", "profileId", "mode", "posting", "artifactsDir", "logsPath", "status", "decisions", "queue"],
   "properties": {
     "id": { "type": "string" },
     "startedAt": { "type": "string", "format": "date-time" },
     "profileId": { "type": "string" },
-    "status": { "type": "string", "enum": ["pending", "review", "submitting", "submitted", "error", "aborted", "duplicate"] },
+    "mode": { "type": "string", "enum": ["review", "auto_review", "auto_submit"] },
+    "status": { "type": "string", "enum": ["pending", "review", "auto_pending", "submitting", "submitted", "error", "aborted", "duplicate"] },
     "posting": {
       "type": "object",
       "required": ["postingUrl", "descriptionText", "descriptionHtmlPath"],
@@ -35,7 +36,8 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
         "screenshotPath": { "type": "string" },
         "edits": { "type": "string" },
         "approved": { "type": "boolean" },
-        "dryRun": { "type": "boolean" }
+        "dryRun": { "type": "boolean" },
+        "suggestedDecision": { "$ref": "#/$defs/SubmissionDecision" }
       }
     },
     "submission": {
@@ -48,9 +50,89 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
       }
     },
     "artifactsDir": { "type": "string" },
-    "logsPath": { "type": "string" }
+    "logsPath": { "type": "string" },
+    "decisions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/SubmissionDecision" }
+    },
+    "queue": { "$ref": "#/$defs/ReviewQueueSnapshot" }
   }
 }
+```
+
+`$defs` additions:
+
+```json
+  "$defs": {
+    "SubmissionDecision": {
+      "type": "object",
+      "required": ["decisionId", "candidateId", "outcome", "confidence", "mode", "timestamp"],
+      "properties": {
+        "decisionId": { "type": "string" },
+        "candidateId": { "type": "string" },
+        "outcome": { "type": "string", "enum": ["approve", "abort", "edit_request", "needs_review"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mode": { "type": "string", "enum": ["human", "ai"] },
+        "rationale": { "type": "string" },
+        "requestedChanges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field", "value"],
+            "properties": {
+              "field": { "type": "string" },
+              "value": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ReviewQueueSnapshot": {
+      "type": "object",
+      "required": ["pending", "decided", "escalated", "lastUpdated"],
+      "properties": {
+        "pending": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ApplicationCandidateSummary" }
+        },
+        "decided": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SubmissionDecision" }
+        },
+        "escalated": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ApplicationCandidateSummary" }
+        },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ApplicationCandidateSummary": {
+      "type": "object",
+      "required": ["id", "posting", "formPlanPath", "discoveredAt", "state"],
+      "properties": {
+        "id": { "type": "string" },
+        "posting": {
+          "type": "object",
+          "required": ["postingUrl"],
+          "properties": {
+            "postingUrl": { "type": "string", "format": "uri" },
+            "title": { "type": "string" },
+            "company": { "type": "string" },
+            "location": { "type": "string" }
+          }
+        },
+        "formPlanPath": { "type": "string" },
+        "discoveredAt": { "type": "string", "format": "date-time" },
+        "state": {
+          "type": "string",
+          "enum": ["discovered", "planned", "awaiting_decision", "decided", "submitted", "shelved"]
+        },
+        "lastDecisionId": { "type": "string" }
+      }
+    }
+  }
 ```
 
 ### HistoryEntry — `history/history.jsonl` (one JSON per line)
@@ -60,7 +142,7 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
   "$id": "urn:schema:history-entry:1-0-0",
   "title": "HistoryEntry",
   "type": "object",
-  "required": ["id", "timestamp", "profileId", "postingUrl", "fingerprint", "status"],
+  "required": ["id", "timestamp", "profileId", "postingUrl", "fingerprint", "mode", "status"],
   "properties": {
     "id": { "type": "string" },
     "timestamp": { "type": "string", "format": "date-time" },
@@ -72,11 +154,22 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
     "location": { "type": "string", "nullable": true },
     "source": { "type": "string", "enum": ["simplyhired"] },
     "fingerprint": { "type": "string" },
-    "status": { "type": "string", "enum": ["submitted", "failed", "aborted", "skipped", "duplicate", "error"] },
+    "mode": { "type": "string", "enum": ["review", "auto_review", "auto_submit"] },
+    "status": { "type": "string", "enum": ["submitted", "failed", "aborted", "skipped", "duplicate", "error", "auto_review_pending"] },
     "confirmation": { "type": "string", "nullable": true },
     "error": { "type": "string", "nullable": true },
     "runPath": { "type": "string", "nullable": true },
-    "screenshots": { "type": "array", "items": { "type": "string" }, "nullable": true }
+    "screenshots": { "type": "array", "items": { "type": "string" }, "nullable": true },
+    "autoReviewSummary": {
+      "type": "object",
+      "nullable": true,
+      "properties": {
+        "approved": { "type": "integer" },
+        "escalated": { "type": "integer" },
+        "autoSubmitted": { "type": "integer" },
+        "averageConfidence": { "type": "number" }
+      }
+    }
   }
 }
 ```

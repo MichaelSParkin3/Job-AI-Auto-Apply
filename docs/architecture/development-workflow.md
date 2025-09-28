@@ -22,8 +22,10 @@ cd apps/ui && pnpm install && pnpm build && cd ../..
 # Development Commands
 # Start preview server (port 4950)
 python -m apps.preview --demo
-# Start CLI dry-run example
-python -m apps.cli apply --search "<simplyhired-search-url>" --limit 2 --profile default --dry-run
+# Start CLI dry-run example (explicit human review mode)
+python -m apps.cli apply --search "<simplyhired-search-url>" --limit 2 --profile default --mode review --dry-run
+# Simulate AI advisory run (decisions logged, no submit)
+python -m apps.cli apply --search "<simplyhired-search-url>" --profile default --mode auto_review --dry-run
 # Run tests
 pytest -q
 cd apps/ui && pnpm test
@@ -37,6 +39,9 @@ OPENROUTER_MODEL=deepseek/deepseek-chat-v3.1:free
 # Optional
 LOG_LEVEL=INFO
 ARTIFACTS_KEEP_DAYS=30
+# AI mode guardrails
+AI_DECISION_MODEL=deepseek/deepseek-chat-v3.1:free
+AI_AUTO_SUBMIT_CONFIDENCE=0.85
 ```
 
 ---

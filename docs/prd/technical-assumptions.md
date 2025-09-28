@@ -10,6 +10,8 @@
 - Guardrails: Restrict to `*.simplyhired.com`; one tab/flow at a time; human-like pacing and stable viewport/locale/timezone.
 - Fallbacks: Deterministic Playwright steps for uploads and nonstandard widgets when LLM actions mis-detect.
 - UI Delivery: FastAPI serves static UI assets from `ui/dist` at `/ui`; Chrome app-mode opens this endpoint.
+- Decision Engine: CLI hosts a pluggable `DecisionEngine` protocol with human and AI implementations; AI mode uses OpenRouter models with per-profile confidence thresholds and must degrade gracefully to human review.
+- Scheduler Adapter: CLI emits Task Scheduler XML / cron snippets; no long-running daemon required.
 
 ## Testing Requirements: Unit + Integration + UI + A11y
 - Unit (Python): config loader/precedence; dedupe hash; PII redaction; run store/history append; artifact pathing; domain guardrails; CLI args.
@@ -36,6 +38,8 @@
 - Logging: `actions.log` structured JSON with PII redaction; verbose debug toggle.
 - UX: Keyboard shortcuts (`A`, `E`, `Esc`) in preview; WCAG AA targets; shadcn/ui components for speed and consistency.
 - Config: `config/config.yaml` + `data/profiles/*.yaml` with precedence CLI → profile → global.
+- AI Modes: Profiles must set `automation.allow_auto` before `auto_review`/`auto_submit` can be invoked; CLI prompts for confirmation on first auto-submit run.
+- Prompt Hygiene: Store AI prompts/responses locally with hashed references; redact PII, truncate long job descriptions.
 
 ### Rationale (Technical Assumptions)
 - Choices align to the brief’s local-first, Windows-focused constraints and minimize moving parts. Monolith + Monorepo reduces operational overhead. Unit + Integration testing balances reliability with simplicity; live E2E is risky for ATS flows, so snapshots/fixtures are favored.

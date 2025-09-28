@@ -8,9 +8,12 @@ apps/ui/src/
   components/
     PreviewCard.tsx
     Toolbar.tsx
+    DecisionConfidenceBadge.tsx
   features/preview/
     PreviewScreen.tsx
     EditDialog.tsx
+    QueuePanel.tsx
+    AutoRunDashboard.tsx
     store.ts
   lib/
     api.ts
@@ -45,8 +48,19 @@ interface PreviewState {
   set: (p: Partial<PreviewState>) => void;
 }
 
-export const usePreview = create<PreviewState>((set) => ({
+interface QueueState {
+  pending: ApplicationCandidateSummary[];
+  escalated: ApplicationCandidateSummary[];
+  decisions: SubmissionDecision[];
+  mode: "review" | "auto_review" | "auto_submit";
+}
+
+export const usePreview = create<PreviewState & QueueState>((set) => ({
   status: "idle",
+  pending: [],
+  escalated: [],
+  decisions: [],
+  mode: "review",
   set: (p) => set(p),
 }));
 ```
@@ -61,6 +75,19 @@ export async function approve(runId: string) {
   const res = await fetch(`/api/run/${runId}/approve`, { method: "POST" });
   if (!res.ok) throw new Error("approve_failed");
 }
+
+export async function fetchQueue(runId: string) {
+  const res = await fetch(`/api/queue/${runId}`);
+  if (!res.ok) throw new Error("queue_fetch_failed");
+  return (await res.json()) as QueueState;
+}
 ```
+
+## Key Views
+- **PreviewScreen:** remains the focused, single-candidate review with AI suggestion badges and keyboard shortcuts.
+- **QueuePanel:** collapsible side drawer listing pending, escalated, and recently decided items; supports filters (`needs review`, `auto submitted`).
+- **AutoRunDashboard:** provides run-level telemetry (decisions per minute, AI confidence histogram) for unattended sessions; enables manual overrides mid-run.
+
+All views are driven by the shared Zustand store so human reviewers and observers see real-time queue updates regardless of mode.
 
 ---
