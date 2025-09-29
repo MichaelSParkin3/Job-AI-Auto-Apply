@@ -1,4 +1,4 @@
-"""Typer CLI entry points for Job AI Auto Apply operations."""
+﻿"""Typer CLI entry points for Job AI Auto Apply operations."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from sites.simplyhired.form_mapper import FormFillPlan, FormSelectorLibrary, For
 from sites.simplyhired.form_filler import FormFillExecutor
 from sites.simplyhired.quick_apply_discovery import QuickApplyDiscovery
 from sites.simplyhired.resume_uploader import ResumeUploader
+from sites.simplyhired.summary_builder import SummaryCompiler
 from sites.simplyhired.search_readiness import SearchReadinessDetector
 from .config_loader import (
     Settings,
@@ -192,6 +193,11 @@ def apply_open(
         None,
         "--session-backups/--no-session-backups",
         help="Enable or disable Browser-Use session backups for this run.",
+    ),
+    simple_click: bool = typer.Option(
+        False,
+        "--simple-click",
+        help="Click the Quick Apply anchor directly (no preflight/filters).",
     ),
 ):
     """Launch Browser-Use with stealth defaults and open the provided URL."""
@@ -491,6 +497,8 @@ def apply_open(
         typer.echo(json.dumps(result.details, ensure_ascii=False, indent=2))
         raise typer.Exit(code=1)
 
+    summary_compiler = SummaryCompiler()
+
     payload: dict[str, Any] = {
         "status": result.status.value,
         "sessionId": controller.session_id,
@@ -512,6 +520,7 @@ def apply_open(
             },
         },
         "profile": binding.cli_payload(),
+        "preview": {},
     }
     payload["backups"] = {
         "enabled": backup_manager.is_enabled,
@@ -877,6 +886,8 @@ def apply_open(
             quick_apply_selectors_base,
             overrides=quick_apply_override_paths,
             inline_overrides=quick_apply_inline_overrides,
+            attempt_trigger=(not dry_run),
+            simple_click=simple_click,
         )
         summary = discovery.run(
             controller,
@@ -1013,6 +1024,7 @@ def apply_open(
 
         form_fill_payload: dict[str, Any] | None = None
         fill_result = None
+        resume_result = None
         if generated_plans:
             resolver = ProfileAnswerResolver(profile=profile_config, binding=binding)
             executor = FormFillExecutor(controller, resolver, max_retries=1)
@@ -1088,6 +1100,41 @@ def apply_open(
                         summary=resume_payload,
                         dry_run=dry_run,
                     )
+            elif binding.resume_path and readiness_record and plan_to_fill.steps:
+                step_lookup = {step.step_id: step.title for step in plan_to_fill.steps}
+                uploader = ResumeUploader(
+                    controller,
+                    resume_path=binding.resume_path,
+                    dry_run=dry_run,
+                    run_dir=readiness_record.run_dir,
+                    step_lookup=step_lookup,
+                )
+                fallback_step = plan_to_fill.steps[0]
+                fallback_selector = "input[type=file]"
+                log_event(
+                    {
+                        "event": "resume.upload.fallback",
+                        "selector": fallback_selector,
+                        "step": fallback_step.step_id,
+                        "profileId": profile_id,
+                    }
+                )
+                resume_result = uploader.upload(
+                    selector=fallback_selector,
+                    step_id=fallback_step.step_id,
+                )
+                resume_payload = resume_result.to_payload()
+                payload["resumeUpload"] = resume_payload
+                payload["telemetry"]["resumeUpload"] = resume_result.telemetry_payload()
+                store.record_resume_upload(readiness_record, resume_payload)
+                if context:
+                    history_writer.append_resume_upload(
+                        context,
+                        profile_id=profile_id,
+                        search_url=search_url,
+                        summary=resume_payload,
+                        dry_run=dry_run,
+                    )
             elif binding.resume_path and readiness_record:
                 log_event(
                     {
@@ -1097,6 +1144,94 @@ def apply_open(
                         "profileId": profile_id,
                     }
                 )
+
+        if readiness_record:
+            posting_metadata: dict[str, object] = {
+                "postingUrl": search_url,
+                "title": None,
+                "company": None,
+                "location": None,
+            }
+            candidates = discovery_payload.get("candidates") if discovery_payload else None
+            if isinstance(candidates, list):
+                first_candidate = candidates[0] if candidates else None
+                for candidate in candidates or []:
+                    if candidate.get("status") == "opened":
+                        first_candidate = candidate
+                        break
+                if isinstance(first_candidate, dict):
+                    if first_candidate.get("title"):
+                        posting_metadata["title"] = first_candidate.get("title")
+                    if first_candidate.get("url"):
+                        posting_metadata["postingUrl"] = first_candidate.get("url")
+            summary_payload_obj = summary_compiler.compile(
+                run_id=readiness_record.id,
+                dry_run=dry_run,
+                posting=posting_metadata,
+                form_result=fill_result,
+                resume_result=resume_result,
+            )
+            summary_preview = summary_payload_obj.to_preview_payload()
+            summary_dir = readiness_record.run_dir / "summary"
+            summary_dir.mkdir(parents=True, exist_ok=True)
+            screenshot_target = summary_dir / "pre-submit.png"
+            capture_result = controller.capture_review_artifacts(
+                output_path=screenshot_target,
+                summary_html=summary_payload_obj.render_html(),
+            )
+            capture_payload = capture_result.to_payload()
+            preview_section = payload.setdefault("preview", {})
+            preview_section["summary"] = summary_preview
+            preview_section["screenshot"] = capture_payload
+            if capture_payload.get("path"):
+                preview_section["screenshotPath"] = capture_payload.get("path")
+            summary_telemetry = summary_payload_obj.telemetry_payload()
+            screenshot_telem = capture_result.telemetry_payload()
+            screenshot_telem["path"] = capture_payload.get("path")
+            summary_telemetry["screenshot"] = screenshot_telem
+            payload["telemetry"]["summary"] = summary_telemetry
+            store.record_preview_summary(
+                readiness_record,
+                summary=summary_preview,
+                screenshot=capture_payload,
+            )
+            if context:
+                history_writer.append_preview_summary(
+                    context,
+                    profile_id=profile_id,
+                    search_url=search_url,
+                    summary=summary_preview,
+                    screenshot=capture_payload,
+                    dry_run=dry_run,
+                )
+            log_event(
+                {
+                    "event": "SUMMARY_READY",
+                    "runId": readiness_record.id,
+                    "profileId": profile_id,
+                    "dryRun": dry_run,
+                    "summary": summary_telemetry,
+                }
+            )
+            typer.echo("\nSubmission summary:")
+            headline = summary_preview.get("headline", {})
+            typer.echo(f"  Job: {headline.get('title') or 'â€”'}")
+            typer.echo(f"  Company: {headline.get('company') or 'â€”'}")
+            typer.echo(f"  Location: {headline.get('location') or 'â€”'}")
+            form_counts = summary_preview.get("form", {})
+            typer.echo(
+                f"  Form: filled={form_counts.get('filledFields', 0)} "
+                f"skipped={form_counts.get('skippedFields', 0)} "
+                f"issues={form_counts.get('issues', 0)}"
+            )
+            resume_preview = summary_preview.get("resume") or {}
+            if resume_preview:
+                typer.echo(
+                    f"  Resume: status={resume_preview.get('status')} "
+                    f"attempts={resume_preview.get('attempts')} "
+                    f"simulated={resume_preview.get('simulated')}"
+                )
+            typer.echo(f"  Screenshot: {capture_payload.get('path')}")
 
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     except (FileNotFoundError, ValueError) as exc:

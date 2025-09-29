@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 
 from apps.browser import BrowserActionStatus, BrowserUseController
 from apps.cli.utils import log_event
@@ -180,8 +182,13 @@ class QuickApplyDiscoverySummary:
 class QuickApplyDiscovery:
     """Encapsulates SimplyHired Quick Apply discovery behaviour."""
 
-    def __init__(self, selectors: QuickApplySelectors) -> None:
+    def __init__(self, selectors: QuickApplySelectors, *, attempt_trigger: bool = False, simple_click: bool = False) -> None:
+        # When attempt_trigger=True (recommended for live runs), discovery will try to click
+        # a Quick Apply control if not immediately detected after opening a candidate.
+        # Tests keep this disabled to avoid snapshot desync from extra captures.
         self.selectors = selectors
+        self.attempt_trigger = attempt_trigger
+        self.simple_click = simple_click
 
     @classmethod
     def load(
@@ -190,6 +197,8 @@ class QuickApplyDiscovery:
         *,
         overrides: Sequence[Path] | None = None,
         inline_overrides: Sequence[Mapping[str, Any]] | None = None,
+        attempt_trigger: bool = False,
+        simple_click: bool = False,
     ) -> "QuickApplyDiscovery":
         data = _load_json(path)
         for override in overrides or ():
@@ -197,7 +206,7 @@ class QuickApplyDiscovery:
                 data = _merge_mapping(data, _load_json(override))
         for mapping in inline_overrides or ():
             data = _merge_mapping(data, mapping)
-        return cls(QuickApplySelectors.from_mapping(data))
+        return cls(QuickApplySelectors.from_mapping(data), attempt_trigger=attempt_trigger, simple_click=simple_click)
 
     def run(
         self,
@@ -492,6 +501,7 @@ class QuickApplyDiscovery:
             return False, None, None
 
         controller.wait_for_idle(timeout=wait_timeout)
+
         detail_result = controller.get_page_html()
         if detail_result.status is BrowserActionStatus.ERROR:
             log_event(
@@ -506,20 +516,199 @@ class QuickApplyDiscovery:
 
         html = detail_result.details.get("html", "")
         mode = self._detect_mode(html)
-        artifact_path = None
+        artifact_path: str | None = None
+
+        # In live mode, if we don't yet see an inline form, proactively click the apply control
+        # even when our initial heuristic said "modal" (which may only indicate the presence
+        # of the button, not the opened modal).
+        if self.attempt_trigger and self._should_trigger(html):
+            triggered = self._trigger_quick_apply(controller, wait_timeout=wait_timeout)
+            if triggered:
+                detail_result = controller.get_page_html()
+                if detail_result.status is BrowserActionStatus.ERROR:
+                    log_event(
+                        {
+                            "level": "error",
+                            "event": "QUICK_APPLY_CAPTURE_FAILED",
+                            "jobKey": candidate.job_key,
+                            "error": detail_result.details.get("error"),
+                        }
+                    )
+                    return False, None, None
+                html = detail_result.details.get("html", "")
+                mode = self._detect_mode(html)
+
         if html.strip():
             artifact_path = self._write_artifact(run_dir, sequence, html)
         return mode is not None, mode, artifact_path
 
     def _detect_mode(self, html: str) -> str | None:
         soup = BeautifulSoup(html, "html.parser")
-        for selector in self.selectors.detail_quick_apply:
-            if soup.select_one(selector):
-                return "modal"
+        # In dry-run/tests (attempt_trigger=False), treat presence of the apply control
+        # as a proxy for a modal. In live runs we require the inline container to appear
+        # after clicking, so we skip this shortcut.
+        if not self.attempt_trigger:
+            for selector in self.selectors.detail_quick_apply:
+                if soup.select_one(selector):
+                    return "modal"
         for selector in self.selectors.detail_inline:
             if soup.select_one(selector):
                 return "inline"
+        # Unknown until the form renders; treat as None so the live trigger can run
         return None
+
+    def _should_trigger(self, html: str) -> bool:
+        """Return True when we should attempt to open Quick Apply.
+
+        We trigger when no inline application container is detected yet.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        for selector in self.selectors.detail_inline:
+            if soup.select_one(selector):
+                return False
+        return True
+
+    def _trigger_quick_apply(
+        self,
+        controller: BrowserUseController,
+        *,
+        wait_timeout: float,
+    ) -> bool:
+        """Attempt to trigger Quick Apply with preference for on-platform flows.
+
+        Strategy (live):
+        - Prefer button-based triggers.
+        - For anchor triggers, skip those with href starting with '/out' (off-platform).
+        - After a successful click, wait for idle and let caller re-evaluate the DOM.
+        """
+
+        # Build candidate selectors with preference ordering
+        preferred_selectors: list[str] = []
+        if self.simple_click:
+            # User-requested simple click: mimic a straightforward user click on the visible Quick Apply control
+            # Prefer the bolt icon inside the anchor (clicking the child bubbles to the anchor)
+            preferred_selectors.append(
+                "a[data-testid=viewJobHeaderFooterApplyButton] svg[data-icon='bolt-lightning']"
+            )
+            # Then the anchor itself
+            preferred_selectors.append("a[data-testid=viewJobHeaderFooterApplyButton]")
+            # Then the button variant if present
+            preferred_selectors.append("button[data-testid=viewJobHeaderFooterApplyButton]")
+            # Lastly any other known apply selectors
+            preferred_selectors.extend(list(self.selectors.detail_quick_apply))
+        else:
+            # Safer default ordering and filtering
+            preferred_selectors.append("button[data-testid=viewJobHeaderFooterApplyButton]")
+            preferred_selectors.append(
+                "a[data-testid=viewJobHeaderFooterApplyButton]:not([href^='/out']) svg[data-icon='bolt-lightning']"
+            )
+            preferred_selectors.append(
+                "a[data-testid=viewJobHeaderFooterApplyButton]:not([href^='/out'])"
+            )
+            preferred_selectors.extend(list(self.selectors.detail_quick_apply))
+
+        def _domain_allowed(domain: str, allowed_patterns: tuple[str, ...]) -> bool:
+            d = domain.lower()
+            for pat in allowed_patterns:
+                p = pat.lower()
+                if p.startswith("*."):
+                    suffix = p[2:]
+                    if d == suffix or d.endswith("." + suffix):
+                        return True
+                else:
+                    if d == p:
+                        return True
+            return False
+
+        allowed_domains = controller.config.guardrail_domains
+
+        tried: list[str] = []
+        for selector in preferred_selectors:
+            tried.append(selector)
+            # Pre-filter only when not in simple_Click mode
+            if (not self.simple_click) and (selector.lstrip().startswith("a[") or selector.strip().startswith("a ") or selector.strip().startswith("a:") or selector.strip().startswith("a#") or selector.strip().startswith("a.") or selector.strip() == "a" or selector.strip().startswith("a[")):
+                html_probe = controller.get_page_html()
+                if html_probe.status is BrowserActionStatus.OK:
+                    soup = BeautifulSoup(html_probe.details.get("html", ""), "html.parser")
+                    node = soup.select_one(selector)
+                    if node is not None:
+                        href = node.get("href") or node.get("data-mdref")
+                        if href:
+                            if href.startswith("/out"):
+                                # User-requested behavior: construct absolute /out URL and navigate to it
+                                base = controller.get_current_url()
+                                base_url = base.details.get("url") if base.status is BrowserActionStatus.OK else "https://www.simplyhired.com/"
+                                from urllib.parse import urljoin
+                                out_url = urljoin(base_url, href)
+                                nav = controller.open_url(out_url)
+                                if nav.status is BrowserActionStatus.OK:
+                                    controller.wait_for_idle(timeout=wait_timeout)
+                                    log_event({
+                                        "event": "QUICK_APPLY_OUT_NAVIGATED",
+                                        "href": href,
+                                        "outUrl": out_url,
+                                    })
+                                    # Reuse post-click confirmation loop after navigation
+                                    for i in range(5):
+                                        url_result = controller.get_current_url()
+                                        current_url = url_result.details.get("url") if url_result.status is BrowserActionStatus.OK else None
+                                        if current_url:
+                                            log_event({"event": "quick_apply.url_check", "url": current_url, "attempt": i + 1})
+                                            if ("smartapply.indeed.com" in current_url) or ("indeedapply" in current_url):
+                                                log_event({"event": "QUICK_APPLY_URL_CONFIRMED", "url": current_url})
+                                                break
+                                        html_after = controller.get_page_html()
+                                        if html_after.status is BrowserActionStatus.OK and self._detect_mode(html_after.details.get("html", "")) == "inline":
+                                            log_event({"event": "QUICK_APPLY_INLINE_CONFIRMED"})
+                                            break
+                                        time.sleep(0.35)
+                                    return True
+                                # If navigation failed, fall through to normal click handling
+                            parsed = urlparse(href)
+                            if parsed.scheme and parsed.netloc:
+                                if not _domain_allowed(parsed.netloc, allowed_domains):
+                                    log_event({
+                                        "level": "debug",
+                                        "event": "QUICK_APPLY_SELECTOR_SKIPPED_OFFSITE",
+                                        "selector": selector,
+                                        "reason": "href_external_domain",
+                                        "href": href,
+                                    })
+                                    continue
+            result = controller.safe_click(selector, timeout=wait_timeout)
+            if result.status is BrowserActionStatus.OK:
+                controller.wait_for_idle(timeout=wait_timeout)
+                log_event(
+                    {
+                        "event": "QUICK_APPLY_TRIGGERED",
+                        "selector": selector,
+                    }
+                )
+                # Post-click quick poll: confirm URL or inline form
+                for i in range(5):
+                    url_result = controller.get_current_url()
+                    current_url = url_result.details.get("url") if url_result.status is BrowserActionStatus.OK else None
+                    if current_url:
+                        log_event({"event": "quick_apply.url_check", "url": current_url, "attempt": i + 1})
+                        if ("smartapply.indeed.com" in current_url) or ("indeedapply" in current_url):
+                            log_event({"event": "QUICK_APPLY_URL_CONFIRMED", "url": current_url})
+                            break
+                    # Also allow inline form to render without navigation
+                    html_probe = controller.get_page_html()
+                    if html_probe.status is BrowserActionStatus.OK and self._detect_mode(html_probe.details.get("html", "")) == "inline":
+                        log_event({"event": "QUICK_APPLY_INLINE_CONFIRMED"})
+                        break
+                    time.sleep(0.35)
+                return True
+        log_event(
+            {
+                "level": "debug",
+                "event": "QUICK_APPLY_TRIGGER_MISSING",
+                "message": "No quick apply trigger matched expected selectors.",
+                "tried": tried,
+            }
+        )
+        return False
 
     def _close_quick_apply(
         self, controller: BrowserUseController, *, wait_timeout: float

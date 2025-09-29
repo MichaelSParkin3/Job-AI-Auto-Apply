@@ -14,6 +14,7 @@ from apps.browser.controller import (  # noqa: E402
     BrowserUseController,
 )
 from apps.browser.guardrails import NavigationGuardrails  # noqa: E402
+from apps.preview.constants import placeholder_screenshot_bytes  # noqa: E402
 
 
 class StubClient:
@@ -28,6 +29,7 @@ class StubClient:
         self.checkbox_calls: list[tuple[str, bool]] = []
         self.state_calls: list[tuple[str, str]] = []
         self.upload_calls: list[tuple[str, tuple[str, ...]]] = []
+        self.screenshot_calls: list[str] = []
 
     def open_url(self, url: str) -> dict[str, str]:
         self.open_calls.append(url)
@@ -83,6 +85,11 @@ class StubClient:
         self.upload_calls.append((selector, normalized))
         files = [{"name": Path(path).name, "size": 1024} for path in normalized]
         return {"result": {"ok": True, "files": files}}
+
+    def capture_review_screenshot(self, path: str) -> dict[str, Any]:
+        self.screenshot_calls.append(path)
+        Path(path).write_bytes(placeholder_screenshot_bytes())
+        return {"path": path, "method": "stub"}
 
 
 def build_guardrails(events: list[dict[str, Any]]) -> NavigationGuardrails:
@@ -333,3 +340,39 @@ def test_guardrails_maintain_single_tab_count_after_blocked_attempts() -> None:
     assert decision.allowed is True
     assert decision.event["guardrails"]["tabCount"] == 1
     assert decision.event["guardrails"]["blockedTabAttempts"] == 2
+
+
+def test_capture_review_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    events: list[dict[str, Any]] = []
+
+    def fake_log(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    monkeypatch.setattr("apps.browser.controller.log_event", fake_log)
+
+    config = BrowserLaunchConfig(
+        profile_id="frontend-dev",
+        user_data_dir=tmp_path,
+        model="profile-model",
+        viewport_width=1366,
+        viewport_height=768,
+        locale="en-US",
+        timezone="UTC",
+    )
+    controller = BrowserUseController(
+        config,
+        client_factory=lambda _: StubClient(),
+        guardrails=build_guardrails(events),
+    )
+
+    target = tmp_path / "summary" / "pre-submit.png"
+    result = controller.capture_review_artifacts(
+        output_path=target,
+        summary_html="<html><body>hello</body></html>",
+    )
+
+    assert target.exists()
+    assert result.method in {"stub", "browser-use", "playwright"}
+    payload = result.to_payload()
+    assert payload["path"] == str(target)
+    assert any(evt.get("event") == "review.capture.completed" for evt in events)

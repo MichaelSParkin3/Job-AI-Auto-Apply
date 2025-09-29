@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import threading
 import hashlib
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -23,6 +24,7 @@ from typing import (
 )
 
 from apps.cli.utils import log_event
+from apps.preview.constants import placeholder_screenshot_bytes
 from .guardrails import NavigationGuardrails
 
 if TYPE_CHECKING:  # pragma: no cover - import for type hints only
@@ -73,6 +75,33 @@ class BrowserActionResult:
     telemetry: Dict[str, Any]
 
 
+@dataclass(slots=True)
+class ReviewArtifactCapture:
+    """Represents the outcome of capturing a review screenshot."""
+
+    screenshot_path: Path
+    method: str
+    html_path: Path | None = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "path": str(self.screenshot_path),
+            "method": self.method,
+        }
+        if self.html_path is not None:
+            payload["htmlPath"] = str(self.html_path)
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+    def telemetry_payload(self) -> dict[str, Any]:
+        payload = {"method": self.method}
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
 class BrowserClient(Protocol):
     """Protocol representing the Browser-Use client we interact with."""
 
@@ -108,6 +137,17 @@ class BrowserClient(Protocol):
 
     def set_input_files(self, selector: str, paths: Sequence[str]) -> Any:  # pragma: no cover
         """Attach files to an <input type="file"> element."""
+
+    def capture_review_screenshot(self, path: str) -> Any:  # pragma: no cover - optional
+        """Optional helper provided by Browser-Use to capture review screenshots."""
+
+    # Optional but recommended: provide current URL for post-click confirmation
+    def get_current_url(self) -> str:  # pragma: no cover - runtime protocol
+        """Return the current window.location.href if available."""
+
+    # Optional: resolve the final URL after redirects without navigating the tab
+    def resolve_redirect(self, url: str) -> str:  # pragma: no cover - runtime protocol
+        """Return the final resolved URL for the given target if possible."""
 
 
 ClientFactory = Callable[[BrowserLaunchConfig], BrowserClient]
@@ -182,6 +222,31 @@ class BrowserSessionAdapter:
     def set_input_files(self, selector: str, paths: Sequence[str]) -> Dict[str, Any]:
         result = self._run(self._set_input_files(selector, paths))
         return {"selector": selector, "result": result}
+
+    def capture_review_screenshot(self, path: str) -> Dict[str, Any]:
+        output = Path(path)
+        result = self._run(self._capture_review_screenshot(output))
+        return result
+
+    def get_current_url(self) -> str:
+        """Return the current page URL via a lightweight JS evaluation.
+
+        We intentionally avoid exposing the underlying Playwright page or
+        event loop; this stays consistent with other adapter methods.
+        """
+        return str(self._run(self._evaluate_js("(() => window.location.href)()")))
+
+    def resolve_redirect(self, url: str) -> str:
+        """Resolve final URL for a target via in-page fetch following redirects."""
+        expression = (
+            "(() => {\n"
+            f"  const u = {json.dumps(url)};\n"
+            "  return fetch(u, { redirect: 'follow', method: 'GET', credentials: 'include' })\n"
+            "    .then(r => r && r.url ? r.url : null)\n"
+            "    .catch(() => null);\n"
+            "})()"
+        )
+        return str(self._run(self._evaluate_js(expression)))
 
     def close(self) -> None:
         if self._closed:
@@ -509,13 +574,59 @@ class BrowserSessionAdapter:
 
     async def _set_input_files(self, selector: str, paths: Sequence[str]) -> Dict[str, Any]:
         await self._ensure_focus_ready()
-        page = getattr(self._session, "page", None)
-        if page is None:
-            raise RuntimeError("Browser session is not exposing a Playwright page")
-        if not hasattr(page, "set_input_files"):
-            raise RuntimeError("Playwright page does not support set_input_files")
         normalized = [str(Path(path)) for path in paths]
-        await page.set_input_files(selector, normalized)
+        cdp_session = await self._session.get_or_create_cdp_session()
+        cdp_client = cdp_session.cdp_client
+        session_id = cdp_session.session_id
+        await cdp_client.send.DOM.enable(session_id=session_id)
+        check_expression = (
+            "(() => {\n"
+            f"  const selector = {json.dumps(selector)};\n"
+            "  const element = document.querySelector(selector);\n"
+            "  if (!element) { return { ok: false, reason: 'not_found' }; }\n"
+            "  const tagName = element.tagName ? element.tagName.toLowerCase() : '';\n"
+            "  const type = (element.getAttribute('type') || '').toLowerCase();\n"
+            "  const isFileInput = tagName === 'input' && type === 'file';\n"
+            "  const reason = isFileInput ? null : `not_file_input:${tagName || 'unknown'}/${type || 'unknown'}`;\n"
+            "  return { ok: isFileInput, tagName, type, reason };\n"
+            "})()"
+        )
+        metadata = await self._evaluate_js(check_expression)
+        if not isinstance(metadata, Mapping):
+            raise RuntimeError("Unable to inspect file input selector")
+        if not metadata.get("ok"):
+            raise RuntimeError(f"File input selector failed: {metadata.get('reason', 'not_file_input')}")
+        evaluation = await cdp_client.send.Runtime.evaluate(
+            params={
+                "expression": f"(() => document.querySelector({json.dumps(selector)}))()",
+                "objectGroup": "file-upload",
+                "includeCommandLineAPI": True,
+                "returnByValue": False,
+            },
+            session_id=session_id,
+        )
+        remote = evaluation.get("result", {})
+        if remote.get("subtype") == "null":
+            raise RuntimeError("File input element not found during upload")
+        object_id = remote.get("objectId")
+        if not object_id:
+            raise RuntimeError("Unable to resolve DOM object for file input")
+        try:
+            await cdp_client.send.DOM.setFileInputFiles(
+                params={
+                    "files": normalized,
+                    "objectId": object_id,
+                },
+                session_id=session_id,
+            )
+        finally:
+            try:
+                await cdp_client.send.Runtime.releaseObjectGroup(  # type: ignore[attr-defined]
+                    params={"objectGroup": "file-upload"},
+                    session_id=session_id,
+                )
+            except Exception:
+                pass
         files = [
             {
                 "name": Path(path).name,
@@ -524,6 +635,27 @@ class BrowserSessionAdapter:
             for path in normalized
         ]
         return {"ok": True, "files": files}
+
+    async def _capture_review_screenshot(self, output_path: Path) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cdp_session = await self._session.get_or_create_cdp_session()
+        screenshot = await cdp_session.cdp_client.send.Page.captureScreenshot(
+            params={
+                "format": "png",
+                "captureBeyondViewport": False,
+            },
+            session_id=cdp_session.session_id,
+        )
+        data = screenshot.get("data")
+        if not isinstance(data, str) or not data:
+            raise RuntimeError("captureScreenshot returned no data")
+        output_path.write_bytes(base64.b64decode(data))
+        return {
+            "path": str(output_path),
+            "method": "cdp",
+            "captureBeyondViewport": False,
+        }
 
     async def _get_outer_html(self) -> str:
         await self._ensure_focus_ready()
@@ -715,6 +847,22 @@ class BrowserUseController:
             info["sha256"] = None
         return info
 
+    @staticmethod
+    def _sanitize_capture_result(result: Any) -> Dict[str, Any]:
+        if isinstance(result, Mapping):
+            sanitized: Dict[str, Any] = {}
+            for key, value in result.items():
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    sanitized[key] = value
+                elif isinstance(value, Mapping):
+                    sanitized[key] = {
+                        k: v
+                        for k, v in value.items()
+                        if isinstance(v, (str, int, float, bool)) or v is None
+                    }
+            return sanitized
+        return {}
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -836,6 +984,80 @@ class BrowserUseController:
             telemetry=payload,
         )
 
+    def get_current_url(self) -> BrowserActionResult:
+        """Return the current page URL using client shims (no event-loop dependency)."""
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {"event": "browser.url"}
+        try:
+            url: str | None = None
+            # Prefer an explicit client method if available
+            get_url = getattr(client, "get_current_url", None)
+            if callable(get_url):
+                url = str(get_url())
+            else:
+                page = getattr(client, "page", None)
+                if page is not None:
+                    # Playwright exposes page.url (property) or page.url() (callable in some wrappers)
+                    value = getattr(page, "url", None)
+                    url = str(value() if callable(value) else value) if value is not None else None
+            if not url:
+                raise AttributeError("url_unavailable")
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "warning",
+                    "event": "browser.url.failed",
+                    "sessionId": self.session_id,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"url": url},
+            telemetry=payload | {"url": url},
+        )
+
+    def resolve_redirect(self, url: str) -> BrowserActionResult:
+        """Resolve the final URL after following redirects using in-page fetch.
+
+        Useful for safely preflighting off-platform redirectors (e.g., /out links)
+        without navigating the tab. Returns the resolved absolute URL string.
+        """
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {"event": "browser.resolve_redirect", "target": url}
+        try:
+            resolver = getattr(client, "resolve_redirect", None)
+            final_url = resolver(url) if callable(resolver) else None
+            if not isinstance(final_url, str) or not final_url:
+                raise RuntimeError("resolve_failed")
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "warning",
+                    "event": "browser.resolve_redirect.failed",
+                    "sessionId": self.session_id,
+                    "error": str(exc),
+                    "target": url,
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"url": final_url},
+            telemetry=payload | {"resolvedUrl": final_url},
+        )
+
     def upload_file(
         self,
         selector: str,
@@ -899,6 +1121,77 @@ class BrowserUseController:
             status=BrowserActionStatus.OK,
             details={"response": sanitized},
             telemetry=telemetry,
+        )
+
+    def capture_review_artifacts(
+        self,
+        *,
+        output_path: Path,
+        summary_html: str | None = None,
+    ) -> ReviewArtifactCapture:
+        """Capture a stable review screenshot with a synthetic fallback."""
+
+        client = self._ensure_client()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata: Dict[str, Any] = {}
+        html_path: Path | None = None
+        try:
+            capture_fn = getattr(client, "capture_review_screenshot", None)
+            if callable(capture_fn):
+                result = capture_fn(str(output_path))
+                metadata = self._sanitize_capture_result(result)
+                method = metadata.pop("method", "browser-use") or "browser-use"
+            elif hasattr(client, "page") and hasattr(client.page, "screenshot"):
+                screenshot_fn = getattr(client.page, "screenshot")
+                screenshot_fn(path=str(output_path), full_page=False)
+                method = "playwright"
+            else:
+                raise AttributeError("capture_api_missing")
+        except Exception as exc:
+            method = "synthetic"
+            html_path = output_path.with_suffix(".html")
+            fallback_html = summary_html or (
+                "<html><body><h1>Preview unavailable</h1><p>"
+                "Unable to capture review screen; synthetic summary rendered."
+                "</p></body></html>"
+            )
+            html_path.write_text(fallback_html, encoding="utf-8")
+            output_path.write_bytes(placeholder_screenshot_bytes())
+            metadata = {"error": str(exc)}
+            log_event(
+                {
+                    "level": "warning",
+                    "event": "review.capture.synthetic",
+                    "sessionId": self.session_id,
+                    "profileId": self.config.profile_id,
+                    "path": str(output_path),
+                    "htmlPath": str(html_path),
+                    "error": str(exc),
+                }
+            )
+            return ReviewArtifactCapture(
+                screenshot_path=output_path,
+                method=method,
+                html_path=html_path,
+                metadata=metadata,
+            )
+
+        if not output_path.exists():
+            output_path.write_bytes(placeholder_screenshot_bytes())
+
+        log_event(
+            {
+                "event": "review.capture.completed",
+                "sessionId": self.session_id,
+                "profileId": self.config.profile_id,
+                "path": str(output_path),
+                "method": method,
+            }
+        )
+        return ReviewArtifactCapture(
+            screenshot_path=output_path,
+            method=method,
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------

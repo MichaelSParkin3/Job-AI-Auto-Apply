@@ -9,7 +9,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from apps.preview.constants import (
     PLACEHOLDER_NOTES,
@@ -347,6 +347,26 @@ class RunStore:
 
         data = self._load_run_json(record.run_json_path)
         data["resumeUpload"] = resume_payload
+        self._write_run_json(record.run_json_path, data)
+        return data
+
+    def record_preview_summary(
+        self,
+        record: RunRecord,
+        *,
+        summary: Mapping[str, Any],
+        screenshot: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Persist the submission preview summary and screenshot metadata."""
+
+        data = self._load_run_json(record.run_json_path)
+        preview = data.setdefault("preview", {})
+        preview["summary"] = dict(summary)
+        screenshot_payload = dict(screenshot)
+        if "path" in screenshot_payload:
+            preview["screenshotPath"] = str(screenshot_payload["path"])
+        preview["screenshot"] = screenshot_payload
+        data["status"] = "review"
         self._write_run_json(record.run_json_path, data)
         return data
 
