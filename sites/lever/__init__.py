@@ -9,7 +9,32 @@ Scope in this scaffold:
 - Thin form executor stub to be wired to BrowserUseController later.
 """
 
+from .form_executor import (
+    LeverFieldPlan,
+    LeverFormExecutor,
+    LeverFormPlan,
+    LeverFormPlanner,
+    detect_resume_success,
+)
+from .lever_google_discovery import (
+    LeverGoogleDiscovery,
+    LeverGooglePlan,
+    LeverSerpResult,
+    build_google_query,
+    paginate,
+)
+
+
 __all__ = [
+    "LeverFieldPlan",
+    "LeverFormExecutor",
+    "LeverFormPlan",
+    "LeverFormPlanner",
     "LeverGoogleDiscovery",
+    "LeverGooglePlan",
+    "LeverSerpResult",
+    "build_google_query",
+    "detect_resume_success",
+    "paginate",
 ]
 
