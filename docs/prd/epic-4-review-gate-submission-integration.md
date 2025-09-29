@@ -33,6 +33,18 @@ Acceptance Criteria
 4. Dry-run and guardrails respect new modes (auto modes are ignored unless explicitly requested; default remains `review`).
 5. Unit tests cover mode resolution precedence and serialization of the decision contract.
 
+## Story 4.1.5 — Lever Apply Execution & Review Integration
+As an operator,
+I want the CLI to drive Lever apply forms end-to-end and feed the review queue,
+so that dry-run sessions capture complete artifacts for human approval before submission.
+
+Acceptance Criteria
+1. `python app.py apply run --source lever-google` consumes `LeverGoogleDiscovery.plan` output (plan file path or freshly generated) and iterates each candidate, launching Browser-Use to reach the Lever apply form using `LeverNavigator` fallbacks.
+2. For each discovered candidate, the CLI generates a `LeverFormPlan`, executes `LeverFormExecutor`, uploads the resume via `ResumeUploader`, and persists artifacts under `runs/<id>/lever/<candidateId>/` with redacted telemetry mirrored in `run.json`.
+3. Each candidate is enqueued as an `ApplicationCandidate` (`discovered → planned → awaiting_decision`) with posting metadata, plan path, and resume status recorded in `queue.json` and exposed through `/api/queue/{runId}`.
+4. Summary builder captures the pre-submit payload and screenshot for every candidate and appends them to the preview queue without triggering an actual Lever submission (review mode only, guardrails enforce `jobs.lever.co`, `api.lever.co`, `newassets.hcaptcha.com`).
+5. Tests cover the new CLI path (unit + integration): mock Browser-Use controller to verify guardrail enforcement, queue persistence, summary artifacts, and resume upload telemetry; regression suite runs via `pytest sites/lever/tests -q`.
+
 ## Story 4.2 â€” Review Queue Persistence & APIs
 As an operator,
 I want the automation to queue multiple application candidates with deterministic state transitions,
