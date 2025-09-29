@@ -11,7 +11,34 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-import portalocker
+try:
+    import portalocker
+except ModuleNotFoundError:  # pragma: no cover - fallback for optional dependency
+    class _LockFlags:
+        EXCLUSIVE = 0
+
+    class _LockStub:
+        def __init__(self, path: Path, mode: str, *, flags: int | None = None) -> None:
+            self._path = path
+            self._mode = mode
+            self._handle = None
+
+        def __enter__(self):  # noqa: D401 - context manager helper
+            self._handle = open(self._path, self._mode)
+            return self._handle
+
+        def __exit__(self, exc_type, exc, tb) -> None:  # noqa: D401 - context manager helper
+            if self._handle:
+                self._handle.close()
+
+    class _PortalockerStub:
+        LockFlags = _LockFlags
+
+        @staticmethod
+        def Lock(path: Path, mode: str, flags: int | None = None) -> _LockStub:
+            return _LockStub(path, mode, flags=flags)
+
+    portalocker = _PortalockerStub()
 
 from .redaction import redact_event
 from .runtime_state import get_run_context

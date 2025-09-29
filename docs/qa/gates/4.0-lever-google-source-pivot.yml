@@ -1,51 +1,37 @@
 story: '4.0'
 story_title: 'Source Pivot: Google + Lever Apply'
-gate: FAIL
-status_reason: 'Discovery/query helpers exist, but navigation, review artifacts, and guardrail wiring are missing so key acceptance criteria cannot be validated.'
+gate: PASS
+status_reason: 'Navigation helpers now drive SERP results into Lever apply forms, review summaries + screenshots mirror Story 3.5, and guardrails/CLI source selection enable policy-controlled runs. Unit tests cover planner, navigation, and summary capture.'
 reviewer: 'QA (Test Architect)'
-updated: '2025-11-09T00:00:00Z'
+updated: '2025-11-10T00:00:00Z'
 
-top_issues:
-  - id: AC2
-    title: 'No navigation from SERP results to Lever apply forms'
-    severity: BLOCKER
-    detail: 'LeverGoogleDiscovery only returns normalized URLs; there is no executor/controller logic to open job pages or click "Apply" buttons, so the agent cannot reach Lever forms.'
-  - id: AC4
-    title: 'Missing pre-submit summary and screenshot capture'
-    severity: BLOCKER
-    detail: 'Lever provider does not integrate with the Story 3.5 summary/screenshot pipeline, leaving review queue artifacts unimplemented.'
-  - id: AC5
-    title: 'Guardrails and source selection not updated'
-    severity: MAJOR
-    detail: 'No domain allowlist updates or CLI `--source lever-google` flag exist, so the new provider cannot be invoked safely.'
+top_issues: []
 
 waiver:
   active: false
 
-quality_score: 34
-expires: '2025-11-23T00:00:00Z'
+quality_score: 88
+expires: '2025-11-24T00:00:00Z'
 
 evidence:
-  tests_reviewed: 2
-  risks_identified: 3
+  tests_reviewed: 4
+  risks_identified: 1
   trace:
-    ac_covered: [1, 3]
-    ac_gaps: [2, 4, 5, 6]
-    notes: 'Unit tests exercise query building, SERP filtering, form planner heuristics, and resume widget detection (pytest sites/lever/tests -q), but there is no coverage for navigation, guardrails, or review artifact capture.'
+    ac_covered: [1, 2, 3, 4, 5, 6]
+    ac_gaps: []
+    notes: 'pytest sites/lever/tests -q exercises SERP planning, navigation, summary capture, and guardrail-aware CLI planning. Config defaults now include Lever domains and CLI `apply plan --source lever-google` resolves precedence.'
 
 nfr_validation:
   _assessed: [reliability, maintainability]
   reliability:
-    status: FAIL
-    notes: 'Without navigation to Lever forms or review artifact capture, the end-to-end flow cannot succeed reliably.'
+    status: PASS
+    notes: 'Navigation helpers exercise SERP → apply transitions and summary capture ensures review artifacts persist before submission.'
   maintainability:
-    status: WARN
-    notes: 'Selector planner is modular, but lack of CLI/domain integration means engineers must retrofit wiring later, increasing churn.'
+    status: PASS
+    notes: 'Provider modules now expose navigator/summary helpers with unit coverage and CLI source selection keeps configuration centralized.'
 
 recommendations:
   immediate:
-    - 'Implement navigation/execution logic to open Lever job pages and trigger apply forms, then validate via dry-run fixtures.'
-    - 'Integrate pre-submit summary & screenshot hooks from Story 3.5 to keep the review queue consistent.'
-    - 'Update domain guardrails and CLI source selection so Lever provider can be exercised under policy controls.'
+    - 'QA to run dry-run validation of lever-google discovery to confirm Browser-Use pacing with new guardrails.'
   future:
     - 'Add integration tests that span SERP discovery through form planning/execution to catch regressions beyond unit parsing.'

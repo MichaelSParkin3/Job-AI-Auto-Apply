@@ -149,6 +149,7 @@ class LeverFormExecutor:
                     {
                         "label": field.label,
                         "selector": field.selector,
+                        "valueKey": field.value_key,
                         "reason": "missing",
                     }
                 )
@@ -158,6 +159,7 @@ class LeverFormExecutor:
                 {
                     "label": field.label,
                     "selector": field.selector,
+                    "valueKey": field.value_key,
                     "valuePreview": preview,
                 }
             )
@@ -165,6 +167,7 @@ class LeverFormExecutor:
             "source": self.source,
             "filled": filled,
             "skipped": skipped,
+            "resumeSelector": plan.resume_selector,
         }
 
     @staticmethod

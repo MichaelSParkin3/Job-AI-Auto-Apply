@@ -100,11 +100,13 @@ def test_executor_returns_redacted_preview(selector_config: Path):
             {
                 "label": "Full name",
                 "selector": "input[data-qa='name-input']",
+                "valueKey": "fullName",
                 "valuePreview": "Ada Augu…elace",
             },
         {
             "label": "Email",
             "selector": "input[data-qa='email-input']",
+            "valueKey": "email",
             "valuePreview": "ada@example.com",
         },
     ]
@@ -112,9 +114,11 @@ def test_executor_returns_redacted_preview(selector_config: Path):
         {
             "label": "Phone number",
             "selector": "input[data-qa='phone-input']",
+            "valueKey": "phone",
             "reason": "missing",
         }
     ]
+    assert summary["resumeSelector"] == "input#resume-upload-input.application-file-input"
 
 
 def test_detect_resume_success_variants():
