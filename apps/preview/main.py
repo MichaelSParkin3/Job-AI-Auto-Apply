@@ -131,6 +131,8 @@ def create_app(
                 },
             }
         )
+        if payload.get("queue"):
+            state["queue"] = payload["queue"]
         return state
 
     def _assert_run(run_id: str) -> Dict[str, Any]:
@@ -335,5 +337,18 @@ def create_app(
     async def updates(run_id: str) -> Dict[str, List[Dict[str, object]]]:
         state = _assert_run(run_id)
         return {"events": state.get("events", [])}
+
+    @app.get("/api/queue/{run_id}")
+    async def queue_snapshot(run_id: str) -> Dict[str, Any]:
+        if persistent and run_store is not None and run_record is not None:
+            if run_id != run_record.id:
+                raise HTTPException(status_code=404, detail="Run not found")
+            return run_store.load_queue_snapshot(run_record)
+
+        state = _assert_run(run_id)
+        queue = state.get("queue")
+        if not queue:
+            raise HTTPException(status_code=404, detail="Queue not found")
+        return queue
 
     return app

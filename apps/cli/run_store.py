@@ -48,6 +48,12 @@ class RunRecord:
     profile_id: Optional[str]
     screenshot_path: Path | None
 
+    @property
+    def queue_path(self) -> Path:
+        """Return the filesystem path of the queue snapshot for the run."""
+
+        return self.run_dir / "queue.json"
+
     def to_json_payload(self) -> dict[str, object]:
         """Return the JSON-serializable payload for the initial run stub."""
 
@@ -192,6 +198,87 @@ class RunStore:
         }
         record.run_json_path.write_text(
             json.dumps(run_payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        set_run_context(
+            RunContext(
+                id=record.id,
+                started_at=record.started_at,
+                run_dir=record.run_dir,
+                run_json_path=record.run_json_path,
+                logs_path=record.logs_path,
+                profile_id=record.profile_id,
+                profile_binding=profile_binding,
+            )
+        )
+        return record
+
+    def start_lever_run(
+        self,
+        *,
+        profile_id: str,
+        mode: str,
+        dry_run: bool,
+        source: str,
+        plan_payload: Mapping[str, Any],
+        profile_binding: Optional[Dict[str, Any]] = None,
+    ) -> RunRecord:
+        """Create a run directory for Lever apply execution flows."""
+
+        timestamp = datetime.now(timezone.utc)
+        slug = secrets.token_hex(4)
+        run_id = f"{timestamp:%Y%m%d-%H%M%S}-{slug}"
+        run_dir = self.runs_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        logs_path = run_dir / "actions.log"
+        logs_path.touch(exist_ok=True)
+        record = RunRecord(
+            id=run_id,
+            started_at=timestamp,
+            run_dir=run_dir,
+            run_json_path=run_dir / "run.json",
+            logs_path=logs_path,
+            profile_id=profile_id,
+            screenshot_path=None,
+        )
+        lever_dir = run_dir / "lever"
+        lever_dir.mkdir(parents=True, exist_ok=True)
+
+        queue_snapshot = _empty_queue_snapshot(mode)
+        metadata: Dict[str, Any] = {
+            "mode": mode,
+            "profileLabel": format_profile_label(profile_id),
+            "source": source,
+        }
+        if profile_binding is not None:
+            metadata["profileBinding"] = profile_binding
+
+        payload: Dict[str, Any] = {
+            "id": record.id,
+            "startedAt": record.started_at.isoformat().replace("+00:00", "Z"),
+            "profileId": profile_id,
+            "mode": mode,
+            "status": "pending",
+            "preview": {
+                "dryRun": dry_run,
+                "decision": "pending",
+                "approved": False,
+            },
+            "artifactsDir": str(run_dir),
+            "logsPath": str(logs_path),
+            "metadata": metadata,
+            "lever": {
+                "source": source,
+                "plan": dict(plan_payload.get("plan", {})),
+                "search": plan_payload.get("search"),
+                "notes": list(plan_payload.get("notes", [])),
+                "candidates": {},
+            },
+            "queue": queue_snapshot,
+        }
+        self._write_run_json(record.run_json_path, payload)
+        record.queue_path.write_text(
+            json.dumps(queue_snapshot, indent=2, ensure_ascii=False),
+            encoding="utf-8",
         )
         set_run_context(
             RunContext(
@@ -375,6 +462,44 @@ class RunStore:
 
         return self._load_run_json(record.run_json_path)
 
+    def load_queue_snapshot(self, record: RunRecord) -> Dict[str, Any]:
+        """Load the queue snapshot for the given run."""
+
+        if record.queue_path.exists():
+            return json.loads(record.queue_path.read_text(encoding="utf-8"))
+        queue = _empty_queue_snapshot("review")
+        record.queue_path.write_text(
+            json.dumps(queue, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        return queue
+
+    def save_queue_snapshot(
+        self, record: RunRecord, snapshot: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        """Persist the provided queue snapshot to queue.json and run.json."""
+
+        payload = self._load_run_json(record.run_json_path)
+        payload["queue"] = dict(snapshot)
+        self._write_run_json(record.run_json_path, payload)
+        record.queue_path.write_text(
+            json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        return payload["queue"]
+
+    def upsert_lever_candidate(
+        self, record: RunRecord, candidate_id: str, payload: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        """Insert or update a Lever candidate payload inside run.json."""
+
+        data = self._load_run_json(record.run_json_path)
+        lever_section = data.setdefault("lever", {})
+        candidates = lever_section.setdefault("candidates", {})
+        candidates[candidate_id] = json.loads(
+            json.dumps(payload, ensure_ascii=False)
+        )
+        self._write_run_json(record.run_json_path, data)
+        return candidates[candidate_id]
+
     def plan_retention(self) -> None:
         """Placeholder for future retention planning logic."""
 
@@ -412,4 +537,16 @@ def _now_iso() -> str:
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+def _empty_queue_snapshot(mode: str) -> Dict[str, Any]:
+    """Return an empty queue snapshot conforming to the data model."""
+
+    return {
+        "mode": mode,
+        "pending": [],
+        "decided": [],
+        "escalated": [],
+        "lastUpdated": _now_iso(),
+    }
 

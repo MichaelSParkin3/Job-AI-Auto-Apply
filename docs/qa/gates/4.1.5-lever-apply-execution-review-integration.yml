@@ -1,0 +1,42 @@
+schema: 1
+story: '4.1.5'
+story_title: 'Lever Apply Execution Review Integration'
+gate: PASS
+status_reason: 'CLI dry-run automation orchestrates Lever navigation, resume upload, and preview capture with persisted queue snapshots and artifacts; pytest coverage exercises guardrails, resume telemetry, and API exposure.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-11-21T00:00:00Z'
+
+top_issues:
+  - id: QA-4.1.5-1
+    severity: medium
+    summary: 'Queue snapshot omits preview summary/screenshot metadata, requiring UI to join against lever.candidates payloads.'
+    recommendation: 'Augment queue.json entries with preview summary references so review clients need only a single payload source.'
+
+waiver:
+  active: false
+
+quality_score: 90
+expires: '2025-12-05T00:00:00Z'
+
+evidence:
+  tests_reviewed: 2
+  risks_identified: 1
+  trace:
+    ac_covered: [1, 2, 3, 4, 5]
+    ac_gaps: []
+    notes: '`pytest sites/lever/tests -q` validates Lever apply CLI orchestration, resume upload telemetry, queue persistence, and preview API responses using stubbed Browser-Use controller and fixture selectors.'
+
+nfr_validation:
+  _assessed: [reliability, maintainability]
+  reliability:
+    status: PASS
+    notes: 'RunStore writes per-candidate artifacts and queue transitions for each navigation branch, and tests assert pending items remain in review mode.'
+  maintainability:
+    status: PASS
+    notes: 'Lever orchestration composes existing planner/executor components with RunStore helpers, keeping guardrail/domain logic centralized and testable.'
+
+recommendations:
+  immediate: []
+  future:
+    - 'Document required CLI dependencies (Typer, FastAPI, python-dotenv, portalocker, BeautifulSoup) in setup instructions to avoid repeated QA bootstrap work.'
+    - 'Consider extending queue snapshots with preview summaries to simplify frontend consumption and reduce coupling to run.json.'

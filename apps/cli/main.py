@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import sys
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from typing import Any, Mapping, Optional
-
+import hashlib
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping, Optional
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 import typer
 
@@ -21,7 +24,10 @@ from apps.browser import (
     SessionBackupManager,
 )
 from apps.preview.runner import run_preview_service
-from sites.lever.lever_google_discovery import LeverGoogleDiscovery
+from sites.lever.form_executor import LeverFormExecutor, LeverFormPlanner
+from sites.lever.lever_google_discovery import LeverGoogleDiscovery, LeverSerpResult
+from sites.lever.navigation import LeverNavigator
+from sites.lever.summary import LeverSummaryBuilder
 from sites.simplyhired.form_mapper import FormFillPlan, FormSelectorLibrary, FormStructureMapper
 from sites.simplyhired.form_filler import FormFillExecutor
 from sites.simplyhired.quick_apply_discovery import QuickApplyDiscovery
@@ -181,6 +187,103 @@ def _lever_guardrail_domains() -> list[str]:
     ]
 
 
+def _iso_now() -> str:
+    """Return the current UTC timestamp in ISO-8601 format."""
+
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _fetch_serp_html(url: str) -> str | None:
+    """Fetch Google SERP HTML using a basic HTTP client."""
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/127.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        request = Request(url, headers=headers)
+        with urlopen(request, timeout=20) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
+    except URLError as error:
+        log_event(
+            {
+                "level": "warning",
+                "event": "lever.plan.fetch_failed",
+                "message": "Failed to fetch Lever SERP HTML.",
+                "url": url,
+                "error": getattr(error, "reason", str(error)),
+            }
+        )
+        return None
+
+
+def _lever_candidate_id(url: str) -> str:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
+def _plan_candidates(
+    payload: Mapping[str, Any],
+    *,
+    fetch_html: Callable[[str], str | None] = _fetch_serp_html,
+) -> list[LeverSerpResult]:
+    """Return Lever SERP results from cached plan data or live fetches."""
+
+    results: list[LeverSerpResult] = []
+    seen: set[str] = set()
+    explicit_results: Iterable[Mapping[str, Any]] | None = None
+    if isinstance(payload.get("results"), list):
+        explicit_results = payload.get("results")  # type: ignore[assignment]
+    elif isinstance(payload.get("plan"), Mapping):
+        plan_map = payload.get("plan")  # type: ignore[assignment]
+        if isinstance(plan_map, Mapping) and isinstance(plan_map.get("results"), list):
+            explicit_results = plan_map.get("results")  # type: ignore[assignment]
+    if explicit_results:
+        for item in explicit_results:
+            href = str(item.get("href") or "").strip()
+            if not href or href in seen:
+                continue
+            title = str(item.get("title") or href)
+            mode = str(item.get("mode") or ("apply_direct" if item.get("isApply") else "job_page"))
+            seen.add(href)
+            results.append(LeverSerpResult(title=title, href=href, mode=mode))
+        if results:
+            return results
+
+    plan_map = payload.get("plan") if isinstance(payload.get("plan"), Mapping) else {}
+    urls: Iterable[str] = plan_map.get("urls") if isinstance(plan_map, Mapping) else []
+    for url in urls or []:
+        html = fetch_html(str(url))
+        if not html:
+            continue
+        for result in LeverGoogleDiscovery.extract_results(html):
+            if result.href in seen:
+                continue
+            seen.add(result.href)
+            results.append(result)
+    return results
+
+
+def _queue_upsert(snapshot: dict[str, Any], entry: Mapping[str, Any]) -> None:
+    """Insert or update a pending queue entry in-place."""
+
+    pending = snapshot.setdefault("pending", [])
+    found = False
+    for index, existing in enumerate(pending):
+        if existing.get("id") == entry.get("id"):
+            updated = dict(existing)
+            updated.update(entry)
+            pending[index] = updated
+            found = True
+            break
+    if not found:
+        pending.append(dict(entry))
+    snapshot["lastUpdated"] = _iso_now()
+
 def _load_profile_search_defaults(
     service: ProfileService, profile_id: str
 ) -> tuple[Any, Any, list[str], str | None, str]:
@@ -322,6 +425,371 @@ def apply_lever_plan(
         pages=pages,
         profile=profile,
     )
+
+
+@apply_app.command("run")
+def apply_run(
+    source: str = typer.Option(
+        "lever-google",
+        "--source",
+        "-s",
+        help="Automation source identifier (lever-google).",
+    ),
+    plan: Optional[Path] = typer.Option(
+        None,
+        "--plan",
+        help="Path to plan JSON produced by `apply plan --source lever-google`.",
+    ),
+    terms: Optional[str] = typer.Option(
+        None,
+        "--terms",
+        help="Terms used when generating a Lever plan on the fly.",
+    ),
+    location: Optional[str] = typer.Option(
+        None,
+        "--location",
+        help="Location hint when generating a Lever plan on the fly.",
+    ),
+    time_window: Optional[str] = typer.Option(
+        None,
+        "--time-window",
+        help="Google qdr window (h|d|w|m|y) when generating a plan on the fly.",
+    ),
+    pages: int = typer.Option(1, "--pages", min=1, help="SERP pages to include when generating a plan."),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", "-n", help="Maximum number of candidates to process from the plan."
+    ),
+    profile: Optional[str] = typer.Option(None, "--profile", help="Profile identifier to bind."),
+    dry_run: bool = typer.Option(True, "--dry-run/--live", help="Force dry-run review mode."),
+    mode: str = typer.Option("review", "--mode", help="Run mode (review only)."),
+    model: Optional[str] = typer.Option(None, "--model", help="Override Browser-Use model for this run."),
+) -> str | None:
+    """Execute Lever apply automation end-to-end and populate the review queue."""
+
+    effective_source = source.strip().lower()
+    if effective_source != "lever-google":
+        typer.secho(
+            f"Unsupported source '{source}'. Only lever-google is available.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+    if mode != "review":
+        typer.secho(
+            "Only review mode is supported for Lever automation runs in Epic 4.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+
+    overrides: dict[str, Any] = {"dry_run": dry_run}
+    if profile:
+        overrides["active_profile"] = profile
+    if model:
+        overrides["browser.model"] = model
+
+    settings = Settings.load(overrides=overrides)
+    base = get_base_dir()
+    ensure_runtime_dirs(base)
+
+    service = ProfileService(base=base)
+    profile_id = profile or settings.active_profile
+    if not profile_id:
+        typer.secho(
+            "No active profile set. Pass --profile or run `profiles use <id>` first.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        binding = service.bind_profile(profile_id, require_resume=False)
+    except ApiError as error:
+        typer.secho(error.to_json(), fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    try:
+        profile_config = service.load_profile(profile_id)
+    except (FileNotFoundError, ValueError):
+        profile_config = None
+
+    plan_payload: dict[str, Any]
+    if plan is not None:
+        plan_path = plan if plan.is_absolute() else plan.resolve()
+        if not plan_path.exists():
+            typer.secho(f"Plan file not found at {plan_path}", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        try:
+            plan_payload = json.loads(plan_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            typer.secho(f"Plan file is not valid JSON: {exc}", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+    else:
+        _, _, default_terms, default_location, default_window = _load_profile_search_defaults(
+            service, profile_id
+        )
+        terms_list = list(default_terms or [])
+        if terms:
+            terms_list = [token for token in terms.split(" ") if token.strip()]
+        if not terms_list:
+            terms_list = ["front end"]
+        location_value = default_location or "remote us"
+        if location is not None:
+            location_value = location or ""
+        if not location_value:
+            location_value = "remote us"
+        window_value = default_window or "d"
+        if time_window:
+            window_value = time_window.strip() or window_value
+        plan_payload = _build_lever_plan_payload(
+            profile_id=profile_id,
+            binding=binding,
+            terms=terms_list,
+            location=location_value,
+            time_window=window_value,
+            pages=pages,
+        )
+
+    plan_payload.setdefault("source", effective_source)
+    candidates = _plan_candidates(plan_payload)
+    if limit is not None and limit >= 0:
+        candidates = candidates[: limit]
+    if not candidates:
+        typer.secho(
+            "No Lever apply candidates discovered from the provided plan.",
+            fg=typer.colors.YELLOW,
+        )
+        return None
+
+    binding.user_data_dir.mkdir(parents=True, exist_ok=True)
+
+    profile_model = binding.model_overrides.get("llm") if binding.model_overrides else None
+    effective_model = model or profile_model or settings.OPENROUTER_MODEL or settings.browser_model
+    if not effective_model:
+        typer.secho(
+            "No Browser-Use model configured. Set --model, profile browser.model, or OPENROUTER_MODEL.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    wait_range = tuple(int(value) for value in settings.browser_pacing_wait_jitter_ms)
+    think_range = tuple(float(value) for value in settings.browser_pacing_think_time_range_s)
+    launch_config = BrowserLaunchConfig(
+        profile_id=profile_id,
+        user_data_dir=binding.user_data_dir,
+        model=effective_model,
+        viewport_width=settings.browser_viewport_width,
+        viewport_height=settings.browser_viewport_height,
+        locale=settings.browser_locale,
+        timezone=settings.browser_timezone,
+        chrome_path=settings.chrome_path,
+        guardrail_domains=tuple(_lever_guardrail_domains()),
+        wait_jitter_ms=wait_range,
+        think_time_range_s=think_range,
+        profile_metadata={"mode": mode, "source": effective_source},
+        profile_binding=binding.telemetry_payload(),
+    )
+
+    try:
+        controller = BrowserUseController(launch_config)
+    except (BrowserUseError, BrowserLaunchError) as error:
+        typer.secho(str(error), fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    selectors_path = base / "sites" / "lever" / "selectors" / "form-fields.json"
+    if not selectors_path.exists():
+        typer.secho(
+            f"Lever selector configuration not found at {selectors_path}.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+    try:
+        planner = LeverFormPlanner.load(selectors_path)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.secho(f"Failed to load Lever form selectors: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    run_store = RunStore(base=base)
+    run_record = run_store.start_lever_run(
+        profile_id=profile_id,
+        mode=mode,
+        dry_run=dry_run,
+        source=effective_source,
+        plan_payload=plan_payload,
+        profile_binding=binding.cli_payload(),
+    )
+
+    lever_dir = run_record.run_dir / "lever"
+    lever_dir.mkdir(parents=True, exist_ok=True)
+    plan_output_path = lever_dir / "plan.json"
+    plan_output_path.write_text(
+        json.dumps(plan_payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    resolver = ProfileAnswerResolver(profile=profile_config, binding=binding)
+    executor = LeverFormExecutor()
+    summary_builder = LeverSummaryBuilder(source=effective_source)
+    navigator = LeverNavigator(controller)
+    resume_step_lookup = {"lever-form": "Lever apply form"}
+    resume_uploader = ResumeUploader(
+        controller,
+        resume_path=binding.resume_path,
+        dry_run=dry_run,
+        run_dir=run_record.run_dir,
+        step_lookup=resume_step_lookup,
+    )
+
+    queue_snapshot = run_store.load_queue_snapshot(run_record)
+    processed = 0
+
+    for candidate in candidates:
+        candidate_dir = lever_dir / _lever_candidate_id(candidate.href)
+        candidate_dir.mkdir(parents=True, exist_ok=True)
+        apply_html_path = candidate_dir / "apply.html"
+        form_plan_path = candidate_dir / "form-plan.json"
+        form_summary_path = candidate_dir / "form-summary.json"
+        resume_payload_path = candidate_dir / "resume-upload.json"
+        preview_dir = candidate_dir / "preview"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = preview_dir / "pre-submit.png"
+
+        candidate_id = candidate_dir.name
+        discovered_at = _iso_now()
+        posting_payload = {
+            "postingUrl": candidate.href,
+            "title": candidate.title,
+            "company": None,
+            "location": None,
+        }
+
+        queue_entry = {
+            "id": candidate_id,
+            "posting": posting_payload,
+            "formPlanPath": str(form_plan_path),
+            "discoveredAt": discovered_at,
+            "state": "discovered",
+        }
+        _queue_upsert(queue_snapshot, queue_entry)
+        run_store.save_queue_snapshot(run_record, queue_snapshot)
+
+        candidate_payload: dict[str, Any] = {
+            "id": candidate_id,
+            "result": {
+                "title": candidate.title,
+                "href": candidate.href,
+                "mode": candidate.mode,
+            },
+            "discoveredAt": discovered_at,
+            "state": "discovered",
+            "artifacts": {
+                "applyHtml": str(apply_html_path),
+                "plan": str(form_plan_path),
+                "summary": str(form_summary_path),
+                "resume": str(resume_payload_path),
+                "previewScreenshot": str(screenshot_path),
+            },
+        }
+
+        navigation = navigator.open_result(candidate)
+        navigation_payload = navigation.to_payload()
+        if navigation.html:
+            apply_html_path.write_text(navigation.html, encoding="utf-8")
+        candidate_payload["navigation"] = navigation_payload
+        run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
+
+        if navigation.status != "ok" or not navigation.html:
+            queue_entry["state"] = "shelved"
+            _queue_upsert(queue_snapshot, queue_entry)
+            run_store.save_queue_snapshot(run_record, queue_snapshot)
+            candidate_payload["state"] = "shelved"
+            run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
+            continue
+
+        plan_result = planner.plan_from_html(navigation.html)
+        plan_json = plan_result.to_payload()
+        form_plan_path.write_text(
+            json.dumps(plan_json, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        queue_entry["state"] = "planned"
+        _queue_upsert(queue_snapshot, queue_entry)
+        run_store.save_queue_snapshot(run_record, queue_snapshot)
+        candidate_payload["formPlan"] = {"path": str(form_plan_path), "fields": len(plan_result.fields)}
+        run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
+
+        answers: dict[str, Any] = {}
+        for field in plan_result.fields:
+            resolved = resolver.resolve(profile_field=field.value_key, label=field.label)
+            if resolved.value not in (None, ""):
+                answers[field.value_key] = resolved.value
+        form_summary = executor.execute(plan_result, profile_answers=answers)
+        form_summary_path.write_text(
+            json.dumps(form_summary, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        candidate_payload["formSummary"] = form_summary
+        run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
+
+        resume_success: bool | None = None
+        if binding.resume_path.exists():
+            resume_result = resume_uploader.upload(
+                selector=plan_result.resume_selector, step_id="lever-form"
+            )
+            resume_payload = resume_result.to_payload()
+            resume_payload_path.write_text(
+                json.dumps(resume_payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            candidate_payload["resumeUpload"] = resume_payload
+            candidate_payload.setdefault("telemetry", {})[
+                "resumeUpload"
+            ] = resume_result.telemetry_payload()
+            resume_success = resume_result.status in {"uploaded", "simulated"}
+            run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
+
+        summary_payload = summary_builder.build(
+            run_id=run_record.id,
+            dry_run=dry_run,
+            posting=posting_payload,
+            form_summary=form_summary,
+            resume_success=resume_success,
+        )
+        preview_result = summary_builder.capture_preview(
+            controller,
+            summary_payload,
+            output_path=screenshot_path,
+        )
+        preview_summary_path = candidate_dir / "preview-summary.json"
+        preview_summary_path.write_text(
+            json.dumps(summary_payload.to_preview_payload(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        preview_telemetry_path = candidate_dir / "preview-telemetry.json"
+        preview_telemetry_path.write_text(
+            json.dumps(preview_result.telemetry, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        candidate_payload["preview"] = preview_result.summary
+        candidate_payload.setdefault("telemetry", {})["preview"] = preview_result.telemetry
+        candidate_payload["artifacts"]["previewScreenshot"] = preview_result.screenshot.get("path")
+        candidate_payload["state"] = "awaiting_decision"
+        run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
+
+        run_store.record_preview_summary(
+            run_record,
+            summary=summary_payload.to_preview_payload(),
+            screenshot=preview_result.screenshot,
+        )
+
+        queue_entry["state"] = "awaiting_decision"
+        _queue_upsert(queue_snapshot, queue_entry)
+        run_store.save_queue_snapshot(run_record, queue_snapshot)
+
+        processed += 1
+
+    summary_output = {
+        "runId": run_record.id,
+        "candidatesProcessed": processed,
+        "queuePending": len(queue_snapshot.get("pending", [])),
+    }
+    typer.echo(json.dumps(summary_output, ensure_ascii=False))
+    set_run_context(None)
+    return run_record.id
 
 
 @apply_app.command("open")
