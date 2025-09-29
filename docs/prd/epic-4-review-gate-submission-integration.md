@@ -45,6 +45,18 @@ Acceptance Criteria
 4. Summary builder captures the pre-submit payload and screenshot for every candidate and appends them to the preview queue without triggering an actual Lever submission (review mode only, guardrails enforce `jobs.lever.co`, `api.lever.co`, `newassets.hcaptcha.com`).
 5. Tests cover the new CLI path (unit + integration): mock Browser-Use controller to verify guardrail enforcement, queue persistence, summary artifacts, and resume upload telemetry; regression suite runs via `pytest sites/lever/tests -q`.
 
+## Story 4.1.6 — Lever Plan Browser Discovery
+As an operator,
+I want the Lever planning command to reuse Browser-Use for Google discovery,
+so that the plan step succeeds when Google serves bot-detection interstitials and I can run Lever executions without manual edits.
+
+Acceptance Criteria
+1. `python app.py apply plan --source lever-google` supports a Browser-Use discovery mode that launches Chrome, navigates each SERP URL in the plan payload, and captures HTML via the existing controller.
+2. When Browser-Use discovery is enabled, the command enriches the emitted plan with a populated `results` array, deduped by href, and persists each SERP HTML artifact under `runs/<id>/plan/` for troubleshooting.
+3. Planning guardrails add the minimal Google domains (`www.google.com`, `*.google.com`, `consent.google.com`) alongside Lever domains; the run summary records the expanded guardrail list for audit.
+4. A toggle (`--browser-discovery/--no-browser-discovery`, default configurable via profile/global config) chooses between Browser-Use discovery and the existing HTTP fetch so CI and scripted flows remain headless by default.
+5. Automated tests mock the Browser-Use controller to cover both code paths, verifying JSON output, guardrail payloads, and artifact paths without launching real Chrome.
+
 ## Story 4.2 â€” Review Queue Persistence & APIs
 As an operator,
 I want the automation to queue multiple application candidates with deterministic state transitions,
