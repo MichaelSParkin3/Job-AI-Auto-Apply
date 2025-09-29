@@ -1,0 +1,18 @@
+gate: 4.0-lever-google-source-pivot
+title: Story 4.0 — Source Pivot (Google → Lever)
+epic: 4
+status: PENDING
+date: 2025-09-29
+criteria:
+  - Discovery uses Google SERP with `site:jobs.lever.co/apply` and time window (qdr) params
+  - Results filtered to jobs.lever.co; reaches `/apply` via direct URL or in-page button
+  - Lever provider fills by label+control; `data-qa` keys used when present
+  - Resume upload deterministic; success indicator confirmed
+  - Pre-submit summary + screenshot captured (no submit in Epic 4)
+guardrails:
+  - Allowed domains: jobs.lever.co, *.jobs.lever.co, api.lever.co (optional), newassets.hcaptcha.com (load-only)
+  - One-tab policy enforced
+artifacts:
+  - runs/<id>/run.json
+  - runs/<id>/screenshots/preview.png
+  - history/history.jsonl

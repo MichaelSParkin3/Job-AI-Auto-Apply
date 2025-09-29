@@ -1,4 +1,4 @@
-# Technical Assumptions
+﻿# Technical Assumptions
 
 ## Repository Structure: Monorepo
 - Single repository containing: Python CLI (`Typer`), preview server (`FastAPI`), site playbooks (`sites/`), Browser-Use wrapper, and optional UI in `ui/` (React + Vite + Tailwind + shadcn/ui) built into static assets served by FastAPI.
@@ -7,7 +7,7 @@
 ## Service Architecture
 - Monolith (Python): Typer orchestrates the apply flow and launches/communicates with a FastAPI preview server on port 4950 (same process via thread for simplicity on Windows).
 - Browser: Headful Chrome via Browser-Use with stealth enabled; persistent `user_data_dir` per profile under `.local/browser/profiles/{profile}`; `keep_alive` for reuse across runs.
-- Guardrails: Restrict to `*.simplyhired.com`; one tab/flow at a time; human-like pacing and stable viewport/locale/timezone.
+- Guardrails: Restrict to `*.simplyhired.com`; when `search.source=lever-google`, restrict to `jobs.lever.co`, `*.jobs.lever.co`, optional `api.lever.co`, and load-only `newassets.hcaptcha.com`. one tab/flow at a time; human-like pacing and stable viewport/locale/timezone.
 - Fallbacks: Deterministic Playwright steps for uploads and nonstandard widgets when LLM actions mis-detect.
 - UI Delivery: FastAPI serves static UI assets from `ui/dist` at `/ui`; Chrome app-mode opens this endpoint.
 - Decision Engine: CLI hosts a pluggable `DecisionEngine` protocol with human and AI implementations; AI mode uses OpenRouter models with per-profile confidence thresholds and must degrade gracefully to human review.
@@ -37,11 +37,18 @@
 - Sessions: Auto-backup last-good session per profile; restore on corruption.
 - Logging: `actions.log` structured JSON with PII redaction; verbose debug toggle.
 - UX: Keyboard shortcuts (`A`, `E`, `Esc`) in preview; WCAG AA targets; shadcn/ui components for speed and consistency.
-- Config: `config/config.yaml` + `data/profiles/*.yaml` with precedence CLI → profile → global.
+- Config: `config/config.yaml` + `data/profiles/*.yaml` with precedence CLI â†’ profile â†’ global.
 - AI Modes: Profiles must set `automation.allow_auto` before `auto_review`/`auto_submit` can be invoked; CLI prompts for confirmation on first auto-submit run.
 - Prompt Hygiene: Store AI prompts/responses locally with hashed references; redact PII, truncate long job descriptions.
 
 ### Rationale (Technical Assumptions)
-- Choices align to the brief’s local-first, Windows-focused constraints and minimize moving parts. Monolith + Monorepo reduces operational overhead. Unit + Integration testing balances reliability with simplicity; live E2E is risky for ATS flows, so snapshots/fixtures are favored.
+- Choices align to the briefâ€™s local-first, Windows-focused constraints and minimize moving parts. Monolith + Monorepo reduces operational overhead. Unit + Integration testing balances reliability with simplicity; live E2E is risky for ATS flows, so snapshots/fixtures are favored.
 
 ---
+
+## Source configuration keys (Lever pivot)
+- `search.source`: `lever-google`
+- `search.terms`: array of strings (role terms)
+- `search.location`: string (e.g., "remote us")
+- `search.time_window`: `h|d|w|m|y` (default `d`)
+- Precedence: CLI → profile → global config

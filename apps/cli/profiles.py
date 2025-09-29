@@ -326,6 +326,32 @@ class ProfileConfig(BaseModel):
         alias="user_data_dir",
         description="Browser session directory",
     )
+    # New: search/source configuration for discovery
+    class SearchConfig(BaseModel):
+        source: str = Field(
+            default="lever-google",
+            description="Discovery provider id (e.g., lever-google)",
+            alias="source",
+        )
+        terms: list[str] = Field(default_factory=list, description="Role keywords")
+        location: str | None = Field(default=None, description="Location string")
+        time_window: str = Field(
+            default="d",
+            description="Google qdr window: h|d|w|m|y (default d=past 24h)",
+            alias="time_window",
+        )
+
+        model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+        @field_validator("time_window")
+        @classmethod
+        def validate_window(cls, value: str) -> str:
+            allowed = {"h", "d", "w", "m", "y"}
+            if value not in allowed:
+                raise ValueError("time_window must be one of h|d|w|m|y")
+            return value
+
+    search: SearchConfig | None = Field(default=None, alias="search")
     browser: BrowserOverridesConfig | None = Field(
         default=None,
         alias="browser",
@@ -470,6 +496,17 @@ PROFILE_TEMPLATE = (
     "    width: null\n"
     "    height: null\n"
     "  chrome_path: null\n"
+    "  allowed_domains:\n"
+    "    - '*.simplyhired.com'\n"
+    "    - 'jobs.lever.co'\n"
+    "    - '*.jobs.lever.co'\n"
+    "    - 'api.lever.co'\n"
+    "    - 'newassets.hcaptcha.com'\n"
+    "search:\n"
+    "  source: lever-google\n"
+    "  terms: ['front end']\n"
+    "  location: 'remote us'\n"
+    "  time_window: d\n"
 )
 
 

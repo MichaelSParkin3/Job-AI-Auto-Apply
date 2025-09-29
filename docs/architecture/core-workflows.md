@@ -1,36 +1,35 @@
-# Core Workflows
+﻿# Core Workflows
 
-## Review‑First Apply (Sequence)
 ```mermaid
 sequenceDiagram
   participant U as User
   participant CLI as Typer CLI
-  participant BR as Browser‑Use
+  participant BR as Browser-Use
   participant P as Preview (FastAPI)
   participant UI as React UI
-  participant SH as SimplyHired
+  participant G as Google SERP
+  participant L as Lever (ATS)
 
-  U->>CLI: apply --search <url> --limit 2 --profile <id> --dry-run
-  CLI->>BR: Navigate search, detect Quick Apply, open flow
-  BR->>SH: Fill forms (stealth pacing), upload resume
-  BR-->>CLI: Capture final review screenshot + details
+  U->>CLI: apply --source lever-google --limit 2 --profile <id> --mode review
+  CLI->>BR: Open Google query (site:jobs.lever.co/apply + filters)
+  BR->>G: Collect result anchors and /apply URLs
+  BR->>L: Open Lever form, map + fill, upload resume
+  BR-->>CLI: Capture pre-submit screenshot + summary
   CLI->>P: POST /api/run/preview (payload)
-  UI->>U: Show screenshot + summary (Approve/Edit/Abort)
-  U->>P: Approve or Edit or Abort
-  P->>CLI: Approve → proceed to submit (or Edit once, then retry)
-  CLI->>BR: Submit; on error → retry once; else success
-  CLI->>Artifacts: Save run.json, screenshots, logs; append history.jsonl with decision trail
+  UI->>U: Approve/Edit/Abort
+  P->>CLI: Decision (review mode only; do not submit)
+```
 ```
 
-- **Session resilience** — after the readiness sequence returns `ready`, the CLI spawns a background copy of the resolved Chrome profile into `.local/browser/backups/<profile>/` and records the outcome in both the console payload (`backups.*`) and `runs/<id>/run.json`. If a subsequent launch detects a corrupt session (missing `Preferences`, launch error) the CLI restores the latest snapshot once before surfacing a fatal error. Operators can disable this behaviour per-run or per-profile when ephemeral sessions are desired.
+- **Session resilience** â€” after the readiness sequence returns `ready`, the CLI spawns a background copy of the resolved Chrome profile into `.local/browser/backups/<profile>/` and records the outcome in both the console payload (`backups.*`) and `runs/<id>/run.json`. If a subsequent launch detects a corrupt session (missing `Preferences`, launch error) the CLI restores the latest snapshot once before surfacing a fatal error. Operators can disable this behaviour per-run or per-profile when ephemeral sessions are desired.
 
 ## Run Modes & Decision Flow
 
-- **Mode selection** happens before the Browser-Use session launches. The CLI resolves `mode` from CLI flag → profile override → global config and records it in `run.json` so the preview UI and history know which guardrails to enforce.
+- **Mode selection** happens before the Browser-Use session launches. The CLI resolves `mode` from CLI flag â†’ profile override â†’ global config and records it in `run.json` so the preview UI and history know which guardrails to enforce.
 - **Decision engines** share a `SubmissionDecision` contract (`{ outcome: approve|edit_request|abort|needs_review, confidence, rationale, nextActions[] }`).
   - `HumanDecisionEngine` subscribes to preview UI events; the queue pauses while waiting for a person to respond.
-  - `LLMDecisionEngine` consumes queue entries asynchronously, scoring each candidate and auto-resolving when confidence ≥ threshold, otherwise returning `needs_review` to fall back to the human queue.
-- **Queue states** evolve deterministically: `discovered → planned → awaiting_decision → decided → submitted|shelved`. Queue snapshots are persisted to `run.json.decisions[]` so auto-mode runs can be audited after the fact.
+  - `LLMDecisionEngine` consumes queue entries asynchronously, scoring each candidate and auto-resolving when confidence â‰¥ threshold, otherwise returning `needs_review` to fall back to the human queue.
+- **Queue states** evolve deterministically: `discovered â†’ planned â†’ awaiting_decision â†’ decided â†’ submitted|shelved`. Queue snapshots are persisted to `run.json.decisions[]` so auto-mode runs can be audited after the fact.
 
 ```mermaid
 stateDiagram-v2
@@ -50,7 +49,7 @@ sequenceDiagram
   participant SCHED as Scheduler (optional)
   participant CLI as Typer CLI
   participant DEC as Decision Engine
-  participant BR as Browser‑Use
+  participant BR as Browserâ€‘Use
   participant QUEUE as Review Queue
   participant HIST as Run Store
 

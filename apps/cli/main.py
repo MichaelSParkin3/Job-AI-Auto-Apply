@@ -21,6 +21,7 @@ from apps.browser import (
     SessionBackupManager,
 )
 from apps.preview.runner import run_preview_service
+from sites.lever.lever_google_discovery import LeverGoogleDiscovery
 from sites.simplyhired.form_mapper import FormFillPlan, FormSelectorLibrary, FormStructureMapper
 from sites.simplyhired.form_filler import FormFillExecutor
 from sites.simplyhired.quick_apply_discovery import QuickApplyDiscovery
@@ -169,6 +170,96 @@ def apply_demo(
         history_writer=writer,
         run_context=context,
     )
+
+
+@apply_app.command("lever-plan")
+def apply_lever_plan(
+    terms: Optional[str] = typer.Option(
+        None, "--terms", help="Quoted terms (space-separated). Defaults to profile.search.terms."
+    ),
+    location: Optional[str] = typer.Option(
+        None, "--location", help="Location string (e.g., 'remote us'). Defaults to profile.search.location."
+    ),
+    time_window: Optional[str] = typer.Option(
+        None, "--time-window", help="Google qdr window: h|d|w|m|y. Defaults to profile.search.time_window (d)."
+    ),
+    pages: int = typer.Option(1, "--pages", min=1, help="Number of SERP pages (10 results each)."),
+    profile: Optional[str] = typer.Option(None, "--profile", help="Profile identifier to bind."),
+):
+    """Plan Google SERP discovery URLs for Lever apply pages using profile defaults.
+
+    This command does not browse. It emits a JSON payload with the planned URLs
+    so you can review or feed a discovery runner. Discovery/automation is still
+    review-only per Epic 4.
+    """
+
+    # Load settings for active profile resolution
+    settings = Settings.load(overrides={"active_profile": profile} if profile else None)
+    base = get_base_dir()
+    service = ProfileService(base=base)
+
+    profile_id = profile or settings.active_profile
+    if not profile_id:
+        typer.secho("No active profile. Pass --profile or run `profiles use <id>`.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    binding = service.build_binding(profile_id)
+    # Load profile (tolerate schema errors)
+    result = service.validate_profile(profile_id)
+    prof = result.profile
+    terms_list: list[str] = []
+    loc: str | None = None
+    qdr = "d"
+    if prof and prof.search:
+        terms_list = list(prof.search.terms or [])
+        loc = prof.search.location
+        qdr = prof.search.time_window or "d"
+    if terms:
+        terms_list = [t for t in terms.split(" ") if t.strip()]
+    if location is not None:
+        loc = location
+    if time_window is not None:
+        qdr = time_window
+
+    # Sensible defaults when profile has no search config
+    if not terms_list:
+        terms_list = ["front end"]
+    if not loc:
+        loc = "remote us"
+
+    plan = LeverGoogleDiscovery.plan(terms_list, loc, time_window=qdr, pages=pages)
+
+    # Build profile payload (fallback when invalid)
+    if binding:
+        profile_payload = binding.cli_payload()
+    else:
+        profile_payload = {"id": profile_id, "valid": False}
+
+    payload = {
+        "profile": profile_payload,
+        "search": {
+            "source": "lever-google",
+            "terms": terms_list,
+            "location": loc,
+            "time_window": qdr,
+            "pages": pages,
+        },
+        "guardrails": {
+            "allowed_domains": [
+                "jobs.lever.co",
+                "*.jobs.lever.co",
+                "api.lever.co",
+                "newassets.hcaptcha.com",
+            ]
+        },
+        "plan": plan.to_payload(),
+        "notes": [
+            "Review-only: do not submit during Epic 4.",
+            "Use Browser-Use pacing and single-tab policy.",
+            "Prefer /apply URLs; otherwise click in-page Apply to reach the form.",
+        ],
+    }
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 @apply_app.command("open")

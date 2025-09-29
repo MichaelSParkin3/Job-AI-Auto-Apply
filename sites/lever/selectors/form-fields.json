@@ -1,0 +1,47 @@
+{
+  "$schema": "https://job-ai-auto-apply/schemas/form-selectors.json",
+  "source": "lever",
+  "fields": [
+    {
+      "key": "fullName",
+      "labels": ["Full name", "Name"],
+      "selectors": ["input[data-qa='name-input']", "input[name='name']"]
+    },
+    {
+      "key": "email",
+      "labels": ["Email"],
+      "selectors": ["input[data-qa='email-input']", "input[name='email'][type='email']"]
+    },
+    {
+      "key": "phone",
+      "labels": ["Phone", "Phone number"],
+      "selectors": ["input[data-qa='phone-input']", "input[name='phone']"]
+    },
+    {
+      "key": "location",
+      "labels": ["Current location", "Location"],
+      "selectors": ["input#location-input.location-input", "input[name='location']"]
+    },
+    {
+      "key": "company",
+      "labels": ["Current company"],
+      "selectors": ["input[data-qa='org-input']", "input[name='org']"]
+    },
+    {
+      "key": "linkedinUrl",
+      "labels": ["LinkedIn URL"],
+      "selectors": ["input[name='urls[LinkedIn]']"]
+    },
+    {
+      "key": "githubUrl",
+      "labels": ["GitHub URL"],
+      "selectors": ["input[name='urls[GitHub]']"]
+    },
+    {
+      "key": "portfolioUrl",
+      "labels": ["Portfolio URL"],
+      "selectors": ["input[name='urls[Portfolio]']"]
+    }
+  ]
+}
+

@@ -46,3 +46,13 @@
 - Source of truth is docs/brief.md; FRs directly map to CLI, automation flow, preview, artifacting, and history requirements described there. Trade-offs favor local-first privacy and reliability over breadth (single-site MVP). Stealth constraints (headful, pacing, domain guardrails) limit speed but reduce bot detection risk. Assumptions include availability of OpenRouter free model and Chrome on Windows. Key items needing validation: acceptable pacing defaults, edit loop UX, and JD snapshot legality for local storage.
 
 ---
+
+## Search & Source Configuration (Lever pivot)
+- Profile keys (defaultable via CLI and global config):
+  - `search.source`: `lever-google` (switches discovery to Google SERP constrained to Lever apply pages)
+  - `search.terms`: array of role keywords (default: from active user profile)
+  - `search.location`: free-text location (default: from active user profile)
+  - `search.time_window`: one of `h|d|w|m|y` (default: `d` = past 24 hours)
+- Precedence: CLI flag → profile YAML → global config.
+- Domain guardrails (when `search.source=lever-google`): allow `jobs.lever.co`, `*.jobs.lever.co`, optional `api.lever.co`, and load-only `newassets.hcaptcha.com`.
+- Policy through Epic 4: review-only (collect pre-submit summary + screenshot; do not submit).
