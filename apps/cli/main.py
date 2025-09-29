@@ -1,4 +1,4 @@
-"""Typer CLI entry points for Job AI Auto Apply operations."""
+﻿"""Typer CLI entry points for Job AI Auto Apply operations."""
 
 from __future__ import annotations
 
@@ -193,6 +193,11 @@ def apply_open(
         None,
         "--session-backups/--no-session-backups",
         help="Enable or disable Browser-Use session backups for this run.",
+    ),
+    simple_click: bool = typer.Option(
+        False,
+        "--simple-click",
+        help="Click the Quick Apply anchor directly (no preflight/filters).",
     ),
 ):
     """Launch Browser-Use with stealth defaults and open the provided URL."""
@@ -881,6 +886,8 @@ def apply_open(
             quick_apply_selectors_base,
             overrides=quick_apply_override_paths,
             inline_overrides=quick_apply_inline_overrides,
+            attempt_trigger=(not dry_run),
+            simple_click=simple_click,
         )
         summary = discovery.run(
             controller,
@@ -1208,9 +1215,9 @@ def apply_open(
             )
             typer.echo("\nSubmission summary:")
             headline = summary_preview.get("headline", {})
-            typer.echo(f"  Job: {headline.get('title') or '—'}")
-            typer.echo(f"  Company: {headline.get('company') or '—'}")
-            typer.echo(f"  Location: {headline.get('location') or '—'}")
+            typer.echo(f"  Job: {headline.get('title') or 'â€”'}")
+            typer.echo(f"  Company: {headline.get('company') or 'â€”'}")
+            typer.echo(f"  Location: {headline.get('location') or 'â€”'}")
             form_counts = summary_preview.get("form", {})
             typer.echo(
                 f"  Form: filled={form_counts.get('filledFields', 0)} "
