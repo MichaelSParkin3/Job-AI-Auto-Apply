@@ -82,7 +82,7 @@ from .history_store import HistoryWriter
 from .profiles import ProfileAnswerResolver, ProfileBinding, ProfileService
 from .queue_manager import ApplicationCandidate, ReviewQueueManager
 from .run_store import RunStore
-from .runtime_state import get_run_context, set_run_context
+from .runtime_state import RunContext, get_run_context, set_run_context
 from .utils import ApiError, log_event
 
 
@@ -2413,6 +2413,84 @@ def preview_demo(
         history_writer=writer,
         run_context=context,
     )
+
+
+@preview_app.command("run")
+def preview_run(
+    run_id: str = typer.Argument(
+        ..., help="Existing run identifier (folder name under runs/)."
+    ),
+    no_browser: bool = typer.Option(
+        False,
+        "--no-browser",
+        help="Skip launching Chrome; preview server remains available.",
+    ),
+    port: Optional[int] = typer.Option(
+        None,
+        "--port",
+        min=1024,
+        max=65535,
+        help="Override preview server port (defaults to config value).",
+    ),
+):
+    """Launch the preview FastAPI server for an existing automation run."""
+
+    overrides: dict[str, object] = {}
+    if port is not None:
+        overrides["preview_port"] = port
+    settings = Settings.load(overrides=overrides)
+    base = get_base_dir()
+    run_store = RunStore(base=base)
+    try:
+        record = run_store.load_run_record(run_id)
+    except FileNotFoundError:
+        typer.secho(
+            f"Run '{run_id}' was not found under {run_store.runs_dir}.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+    except json.JSONDecodeError as exc:
+        typer.secho(
+            f"Run '{run_id}' has an invalid run.json: {exc}.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1) from exc
+
+    context = RunContext(
+        id=record.id,
+        started_at=record.started_at,
+        run_dir=record.run_dir,
+        run_json_path=record.run_json_path,
+        logs_path=record.logs_path,
+        profile_id=record.profile_id,
+        mode="review",
+    )
+    previous_context = set_run_context(context)
+    history_writer = HistoryWriter(base=base)
+    log_event(
+        {
+            "event": "preview.run.launch",
+            "message": "Launching preview server for existing run.",
+            "runId": record.id,
+            "port": settings.preview_port,
+        }
+    )
+    typer.echo(
+        f"Starting preview server for run {record.id} on "
+        f"http://localhost:{settings.preview_port}/ui"
+    )
+    try:
+        run_preview_service(
+            settings,
+            demo=False,
+            open_browser=not no_browser,
+            run_record=record,
+            run_store=run_store,
+            history_writer=history_writer,
+            run_context=context,
+        )
+    finally:
+        set_run_context(previous_context)
 
 
 @profiles_app.command("new")
