@@ -2,7 +2,7 @@
 
 Collected guidance and minimal HTML/selector snippets to guide discovery and automation for Lever-hosted application forms discovered via Google.
 
-Last updated: 2025-09-29
+Last updated: 2025-10-05
 
 ## Google SERP — Discovery via `site:jobs.lever.co`
 
@@ -198,45 +198,54 @@ browser:
     - newassets.hcaptcha.com  # load-only for widget
 ```
 
-### Lever Resume Upload — Success/Ready Indicator (paste real snippet)
+### Lever Resume Upload — Resume Analysis Readiness
 
-When Lever finishes parsing the uploaded resume, many tenants expose a visual success indicator (e.g., file chip/attachment row or a status text) and may auto-populate core fields. We will wait for this indicator during ai_autofill before filling remaining fields.
+When Lever finishes parsing the uploaded resume, the apply form toggles stateful spans under the upload control. Our automation waits on those signals (or DOM/network stability) before triggering any field fills so that Lever-populated values can be validated first.
 
-- Placeholder selectors (to be tuned per tenant):
-  - `input#resume-upload-input.application-file-input` (upload control)
-  - [Paste actual success node selector here]
-  - Fallback: small network-idle window + DOM stability check.
+Key selectors captured from production tenants:
 
-Paste the provided HTML snippet here for future tuning:
+- Upload control: `input#resume-upload-input.application-file-input`
+- Success (analysis complete):
+  - `div.resume-upload-success`
+  - `input#resume-upload-input.application-file-input[value]`
+- In-progress indicators (emit `RESUME_ANALYSIS_PROGRESS`):
+  - `div.resume-upload-spinner`
+  - `div.resume-upload-progress`
+- Failure signals (short-circuit wait, log `RESUME_ANALYSIS_DONE` with `status=failed`):
+  - `div.resume-upload-error`
+  - `div.resume-upload-failure`
+
+Representative DOM fragment:
 
 ```html
 <div class="application-field">
   <a href="#" class="postings-btn template-btn-utility visible-resume-upload has-file">
-    <svg class=" icon icon-paperclip" width="16" height="16" viewBox="0 0 16 16"><path id="Vector" d="M4 3.375C4 1.5125 5.5125 0 7.375 0C9.2375 0 10.75 1.5125 10.75 3.375V10.75C10.75 11.9937 9.74375 13 8.5 13C7.25625 13 6.25 11.9937 6.25 10.75V4.75C6.25 4.33437 6.58437 4 7 4C7.41563 4 7.75 4.33437 7.75 4.75V10.75C7.75 11.1656 8.08437 11.5 8.5 11.5C8.91563 11.5 9.25 11.1656 9.25 10.75V3.375C9.25 2.34063 8.40937 1.5 7.375 1.5C6.34063 1.5 5.5 2.34063 5.5 3.375V11.5C5.5 13.1562 6.84375 14.5 8.5 14.5C10.1562 14.5 11.5 13.1562 11.5 11.5V4.75C11.5 4.33437 11.8344 4 12.25 4C12.6656 4 13 4.33437 13 4.75V11.5C13 13.9844 10.9844 16 8.5 16C6.01562 16 4 13.9844 4 11.5V3.375Z"></path></svg>
+    <svg class="icon icon-paperclip" width="16" height="16" viewBox="0 0 16 16"><path d="M4 3.375C4 1.5125 5.5125 0 7.375 0C9.2375 0 10.75 1.5125 10.75 3.375V10.75C10.75 11.9937 9.74375 13 8.5 13C7.25625 13 6.25 11.9937 6.25 10.75V4.75C6.25 4.33437 6.58437 4 7 4C7.41563 4 7.75 4.33437 7.75 4.75V10.75C7.75 11.1656 8.08437 11.5 8.5 11.5C8.91563 11.5 9.25 11.1656 9.25 10.75V3.375C9.25 2.34063 8.40937 1.5 7.375 1.5C6.34063 1.5 5.5 2.34063 5.5 3.375V11.5C5.5 13.1562 6.84375 14.5 8.5 14.5C10.1562 14.5 11.5 13.1562 11.5 11.5V4.75C11.5 4.33437 11.8344 4 12.25 4C12.6656 4 13 4.33437 13 4.75V11.5C13 13.9844 10.9844 16 8.5 16C6.01562 16 4 13.9844 4 11.5V3.375Z"></path></svg>
     <span class="filename">Michael_Parkin_Senior_Front_End_Developer_Resume_2025.pdf</span>
-    <span class="default-label" style="display: none;">ATTACH RESUME/CV</span>
-    <input class="application-file-input invisible-resume-upload" data-qa="input-resume" id="resume-upload-input" name="resume" tabindex="-1" type="file">
+    <span class="default-label" style="display:none;">ATTACH RESUME/CV</span>
+    <input class="application-file-input invisible-resume-upload" data-qa="input-resume" id="resume-upload-input" name="resume" tabindex="-1" type="file" value="blob:chrome-extension://...">
   </a>
-  <span class="resume-upload-failure" style="display: none;"><div class="resume-upload-label">Couldn't auto-read resume.</div></span>
-  <span class="resume-upload-working" style="display: none;"><div class="loading-indicator"></div><div class="resume-upload-label">Analyzing resume...</div></span>
-  <span class="resume-upload-success" style="display: inline;"><div class="loading-indicator completed"><svg class=" icon icon-check" width="16" height="16" viewBox="0 0 16 16"><path d="M15.6652 3.32222C16.1116 3.75184 16.1116 4.44954 15.6652 4.87916L6.52338 13.6778C6.077 14.1074 5.35208 14.1074 4.9057 13.6778L0.334784 9.27847C-0.111595 8.84885 -0.111595 8.15115 0.334784 7.72153C0.781163 7.29191 1.50608 7.29191 1.95246 7.72153L5.71633 11.3407L14.0511 3.32222C14.4975 2.89259 15.2224 2.89259 15.6688 3.32222H15.6652Z"></path></svg></div><div class="resume-upload-label">Success!</div></span>
+  <span class="resume-upload-failure" style="display:none;"><div class="resume-upload-label">Couldn't auto-read resume.</div></span>
+  <span class="resume-upload-progress" style="display:none;"><div class="loading-indicator"></div><div class="resume-upload-label">Analyzing resume...</div></span>
+  <span class="resume-upload-success" style="display:inline;"><div class="loading-indicator completed"><svg class="icon icon-check" width="16" height="16" viewBox="0 0 16 16"><path d="M15.6652 3.32222C16.1116 3.75184 16.1116 4.44954 15.6652 4.87916L6.52338 13.6778C6.077 14.1074 5.35208 14.1074 4.9057 13.6778L0.334784 9.27847C-0.111595 8.84885 -0.111595 8.15115 0.334784 7.72153C0.781163 7.29191 1.50608 7.29191 1.95246 7.72153L5.71633 11.3407L14.0511 3.32222C14.4975 2.89259 15.2224 2.89259 15.6688 3.32222H15.6652Z"></path></svg></div><div class="resume-upload-label">Success!</div></span>
 </div>
 ```
 
-Config proposal (site-level defaults):
+Site-level defaults (`sites/lever/config.yaml`) mirror the observed markup; override per profile when tenant-specific tweaks are required:
 
 ```yaml
 resume:
   success_selectors:
-    # Success states (prefer visible success chip/label or completed check icon)
-    - "span.resume-upload-success .resume-upload-label"
-    - "span.resume-upload-success .loading-indicator.completed"
-    # Has-file indicator (secondary confirmation)
-    - "a.visible-resume-upload.has-file .filename"
+    - "div.resume-upload-success"
+    - "input#resume-upload-input.application-file-input[value]"
   working_selectors:
-    - "span.resume-upload-working .resume-upload-label"
+    - "div.resume-upload-spinner"
+    - "div.resume-upload-progress"
   failure_selectors:
-    - "span.resume-upload-failure .resume-upload-label"
+    - "div.resume-upload-error"
+    - "div.resume-upload-failure"
   max_wait_seconds: 15
   poll_interval_ms: 300
 ```
+
+`sites/lever/resume_analysis.wait_for_analysis` emits the `RESUME_ANALYSIS_*` telemetry family with wait durations and selector hits so QA can verify timing alongside artifacts.

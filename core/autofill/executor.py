@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
@@ -193,10 +194,27 @@ class AutofillExecutor:
         plan: LeverAutofillPlan,
         *,
         answers: Mapping[str, Any],
+        validate_prefilled: bool = False,
     ) -> AutofillExecutionResult:
+        answers_map: MutableMapping[str, Any] = dict(answers)
+        skip_lengths: dict[str, int] = {}
+        if validate_prefilled:
+            answers_map, skip_lengths = self._apply_prefilled_validations(plan, answers_map)
+
         fields: list[FieldExecution] = []
         for intent in plan.fields:
-            value = answers.get(intent.value_key)
+            if intent.value_key in skip_lengths:
+                fields.append(
+                    self._skip_field(
+                        plan,
+                        intent,
+                        reason="prefilled",
+                        value_length=skip_lengths[intent.value_key],
+                    )
+                )
+                continue
+
+            value = answers_map.get(intent.value_key)
             if not _has_value(value):
                 fields.append(
                     self._skip_field(plan, intent, reason="missing_answer")
@@ -227,6 +245,9 @@ class AutofillExecutor:
         reason: str,
         selector: str | None = None,
         value: Any | None = None,
+        value_length: int | None = None,
+        value_preview: str | None = None,
+        value_hash: str | None = None,
     ) -> FieldExecution:
         selector = selector or field.selector
         payload: dict[str, Any] = {
@@ -244,10 +265,16 @@ class AutofillExecutor:
             preview = _preview_value(value)
             length = _value_length(value)
             hashed = _value_hash(value)
+        else:
+            preview = value_preview
+            length = value_length
+            hashed = value_hash
+        if length is not None:
             payload["valueLength"] = length
+        if hashed is not None:
             payload["valueHash"] = hashed
-            if preview is not None:
-                payload["valuePreview"] = preview
+        if preview is not None:
+            payload["valuePreview"] = preview
         self._telemetry(payload)
         return FieldExecution(
             key=field.key,
@@ -346,6 +373,147 @@ class AutofillExecutor:
             after_html=after_html,
         )
         return artifact, None
+
+    def _apply_prefilled_validations(
+        self,
+        plan: LeverAutofillPlan,
+        answers: MutableMapping[str, Any],
+    ) -> tuple[MutableMapping[str, Any], dict[str, int]]:
+        skip_lengths: dict[str, int] = {}
+        outcomes: list[dict[str, Any]] = []
+        for field in plan.fields:
+            if not self._should_validate_field(field):
+                continue
+            widget_type = self._field_widget_type(field)
+            state_result = self._controller.get_field_state(field.selector, widget_type)
+            dom_value = ""
+            dom_length = 0
+            if state_result.status is BrowserActionStatus.OK:
+                state_payload = state_result.details.get("state")
+                if isinstance(state_payload, Mapping):
+                    dom_value = self._extract_state_value(state_payload, widget_type)
+                    dom_length = len(dom_value)
+            if dom_value and self._is_value_valid(field, dom_value):
+                skip_lengths[field.value_key] = dom_length
+                outcomes.append(
+                    {
+                        "key": field.value_key,
+                        "status": "ok",
+                        "source": "dom",
+                        "valueLength": dom_length,
+                    }
+                )
+                continue
+            profile_value = answers.get(field.value_key)
+            if _has_value(profile_value) and self._is_value_valid(field, profile_value):
+                answers[field.value_key] = profile_value
+                outcomes.append(
+                    {
+                        "key": field.value_key,
+                        "status": "updated",
+                        "source": "profile",
+                        "valueLength": _value_length(profile_value),
+                    }
+                )
+                continue
+            outcomes.append(
+                {
+                    "key": field.value_key,
+                    "status": "failed",
+                    "source": "resume",
+                    "valueLength": dom_length,
+                }
+            )
+            self._telemetry(
+                {
+                    "event": "RESUME_FIELD_VALIDATION_FAILED",
+                    "candidateId": plan.candidate_id,
+                    "fieldKey": field.value_key,
+                    "valueLength": dom_length,
+                }
+            )
+        if outcomes:
+            self._telemetry(
+                {
+                    "event": "RESUME_FIELDS_VALIDATED",
+                    "candidateId": plan.candidate_id,
+                    "fields": outcomes,
+                }
+            )
+        return answers, skip_lengths
+
+    @staticmethod
+    def _field_widget_type(field: LeverAutofillField) -> str:
+        field_type = (field.field_type or "text").strip().lower()
+        if field_type in {"select", "dropdown"}:
+            return "select"
+        if field_type in {"radio", "option"}:
+            return "radio"
+        if field_type in {"checkbox"}:
+            return "checkbox"
+        return "text"
+
+    def _extract_state_value(
+        self, state: Mapping[str, Any], widget_type: str
+    ) -> str:
+        if widget_type in {"text", "textarea"}:
+            value = state.get("value")
+            return str(value or "").strip()
+        if widget_type == "select":
+            value = state.get("value") or state.get("label")
+            return str(value or "").strip()
+        if widget_type == "radio":
+            value = state.get("value") or state.get("label")
+            return str(value or "").strip()
+        if widget_type == "checkbox":
+            return "true" if state.get("checked") else ""
+        return str(state.get("value") or "").strip()
+
+    def _should_validate_field(self, field: LeverAutofillField) -> bool:
+        key = field.value_key.lower()
+        if key in {
+            "fullname",
+            "full_name",
+            "firstname",
+            "first_name",
+            "lastname",
+            "last_name",
+            "email",
+            "phone",
+            "phone_number",
+        }:
+            return True
+        if any(token in key for token in ("linkedin", "github", "portfolio", "url", "website", "link")):
+            return True
+        return False
+
+    def _is_value_valid(self, field: LeverAutofillField, value: Any) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        key = field.value_key.lower()
+        field_type = (field.field_type or "text").strip().lower()
+        if key in {"fullname", "full_name"}:
+            return len(text) >= 3 and " " in text
+        if key in {"firstname", "first_name", "lastname", "last_name"}:
+            return len(text) >= 2
+        if "email" in key or field_type == "email":
+            return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", text))
+        if "phone" in key or field_type in {"tel", "phone"}:
+            digits = re.sub(r"\D", "", text)
+            return len(digits) >= 10
+        if any(token in key for token in ("linkedin", "github", "portfolio", "url", "website", "link")):
+            return self._looks_like_url(text)
+        return True
+
+    @staticmethod
+    def _looks_like_url(value: str) -> bool:
+        lowered = value.lower()
+        if lowered.startswith(("http://", "https://", "www.")):
+            return True
+        if "." in lowered and " " not in lowered:
+            return True
+        return False
 
     def _dispatch_action(
         self,

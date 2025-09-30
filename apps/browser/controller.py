@@ -572,6 +572,29 @@ class BrowserSessionAdapter:
         )
         return await self._evaluate_js(expression)
 
+    async def _query_selector(self, selector: str) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        expression = (
+            "(() => {\n"
+            f"  const selector = {json.dumps(selector)};\n"
+            "  const elements = Array.from(document.querySelectorAll(selector));\n"
+            "  const count = elements.length;\n"
+            "  return { exists: count > 0, count };\n"
+            "})()"
+        )
+        result = await self._evaluate_js(expression)
+        if isinstance(result, Mapping):
+            exists = bool(result.get("exists"))
+            count = result.get("count")
+            try:
+                count_value = int(count)
+            except (TypeError, ValueError):
+                count_value = 1 if exists else 0
+            return {"exists": exists, "count": count_value}
+        if isinstance(result, bool):
+            return {"exists": result, "count": 1 if result else 0}
+        return {"exists": bool(result), "count": 1 if result else 0}
+
     async def _set_input_files(self, selector: str, paths: Sequence[str]) -> Dict[str, Any]:
         await self._ensure_focus_ready()
         normalized = [str(Path(path)) for path in paths]
@@ -1680,5 +1703,39 @@ class BrowserUseController:
         return BrowserActionResult(
             status=BrowserActionStatus.OK,
             details=details,
+            telemetry=telemetry,
+        )
+
+    def query_selector(self, selector: str) -> BrowserActionResult:
+        """Return basic presence metadata for a CSS selector."""
+
+        payload = self._base_payload() | {"selector": selector}
+        try:
+            result = self._run(self._query_selector(selector))
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "error",
+                    "event": "browser.selector_query.failed",
+                    "sessionId": self.session_id,
+                    "selector": selector,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        exists = bool(result.get("exists"))
+        count = int(result.get("count", 0)) if isinstance(result, Mapping) else int(bool(result))
+        telemetry = payload | {
+            "event": "browser.selector_query.ok",
+            "exists": exists,
+            "count": count,
+        }
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"exists": exists, "response": {"exists": exists, "count": count}},
             telemetry=telemetry,
         )

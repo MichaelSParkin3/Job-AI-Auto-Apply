@@ -1,0 +1,12 @@
+resume:
+  success_selectors:
+    - "div.resume-upload-success"
+    - "input#resume-upload-input.application-file-input[value]"
+  working_selectors:
+    - "div.resume-upload-spinner"
+    - "div.resume-upload-progress"
+  failure_selectors:
+    - "div.resume-upload-error"
+    - "div.resume-upload-failure"
+  max_wait_seconds: 15
+  poll_interval_ms: 300
