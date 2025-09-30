@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import json
 
 import os
 import types
@@ -186,9 +187,10 @@ def create_app(
     app.state.session_complete = False
     app.state.finalized = False
     app.state.run_record = run_record
+    app.state.run_store = run_store
     app.state.history_writer = history_writer
     app.state.run_context = run_context
-    app.state.persistent = persistent
+    app.state.persistent = bool(persistent)
     app.state.watchdog_timeout = int(os.environ.get("JAA_QUEUE_WATCHDOG_TIMEOUT", "30"))
 
     resolved_static = static_dir or DEFAULT_STATIC_DIR
@@ -203,7 +205,7 @@ def create_app(
 
         @app.get("/", include_in_schema=False)
         async def spa_index() -> FileResponse:
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers={"Cache-Control": "no-store"})
 
     else:
         @app.get("/", include_in_schema=False)
@@ -215,12 +217,48 @@ def create_app(
                 "staticDir": str(resolved_static),
             }
 
+    def _get_context() -> tuple[RunStore | None, RunRecord | None]:
+        rs = getattr(app.state, "run_store", None) or run_store
+        rr = getattr(app.state, "run_record", None) or run_record
+        return rs, rr
+
     def _sync_persistent_state() -> Dict[str, Any]:
-        if not persistent or run_store is None or run_record is None:
-            raise HTTPException(status_code=503, detail="Demo run not initialized")
-        payload = run_store.load_run_payload(run_record)
+        # Be tolerant: if a run was provided, sync from disk regardless of the in-memory flag.
+        rs, rr = _get_context()
+        if rs is None or rr is None:
+            raise HTTPException(status_code=503, detail="Run context not initialized")
+        payload = rs.load_run_payload(rr)
         preview = payload.get("preview", {})
-        state = run_state.setdefault(run_record.id, {"id": run_record.id, "events": []})
+        # Coerce preview.summary to a string if upstream stored a structured payload
+        # (e.g., SummaryPayload.to_preview_payload()).
+        raw_summary = preview.get("summary", PLACEHOLDER_SUMMARY)
+        if isinstance(raw_summary, dict):
+            headline = raw_summary.get("headline") or {}
+            form = raw_summary.get("form") or {}
+            resume = raw_summary.get("resume") or {}
+            title = str(headline.get("title") or "").strip()
+            company = str(headline.get("company") or "").strip()
+            location = str(headline.get("location") or "").strip()
+            parts: List[str] = []
+            if title or company or location:
+                where = f" — {company}" if company else ""
+                loc = f" ({location})" if location else ""
+                parts.append(f"{title}{where}{loc}".strip())
+            if form:
+                f_filled = form.get("filledFields", 0)
+                f_skipped = form.get("skippedFields", 0)
+                f_issues = form.get("issues", 0)
+                parts.append(f"Form: filled {f_filled}, skipped {f_skipped}, issues {f_issues}")
+            if resume:
+                r_status = resume.get("status", "unknown")
+                r_attempts = resume.get("attempts", 0)
+                parts.append(f"Resume: {r_status}, attempts {r_attempts}")
+            summary_text = "\n".join(p for p in parts if p)
+            if not summary_text:
+                summary_text = json.dumps(raw_summary, indent=2, ensure_ascii=False)
+        else:
+            summary_text = str(raw_summary)
+        state = run_state.setdefault(rr.id, {"id": rr.id, "events": []})
         payload_metadata = payload.get("metadata") or {}
         state.update(
             {
@@ -228,7 +266,7 @@ def create_app(
                 "dryRun": bool(preview.get("dryRun", demo)),
                 "preview": {
                     "screenshotUrl": PLACEHOLDER_SCREENSHOT_DATA_URI,
-                    "summary": preview.get("summary", PLACEHOLDER_SUMMARY),
+                    "summary": summary_text,
                     "notes": preview.get("notes", PLACEHOLDER_NOTES),
                     "edits": preview.get("edits"),
                     "decision": preview.get("decision", "pending"),
@@ -251,7 +289,8 @@ def create_app(
 
     def _assert_run(run_id: str) -> Dict[str, Any]:
         if persistent:
-            if run_record is None or run_id != run_record.id:
+            rs, rr = _get_context()
+            if rr is None or run_id != rr.id:
                 _api_error(404, "run_not_found", "Run not found")
             return _sync_persistent_state()
         if run_id not in run_state:
@@ -343,7 +382,22 @@ def create_app(
 
     @app.get("/api/run/{run_id}")
     async def get_run(run_id: str) -> Dict[str, object]:
+        # Handle potential route-precedence overlap ("current" literal matching param route)
+        if run_id == "current":
+            rs, rr = _get_context()
+            if rs is None or rr is None:
+                _api_error(404, "run_not_found", "No active run found for this session")
+            state = _sync_persistent_state()
+            return state
         state = _assert_run(run_id)
+        return state
+
+    @app.get("/api/run/current")
+    async def get_current_run() -> Dict[str, object]:
+        rs, rr = _get_context()
+        if rs is None or rr is None:
+            _api_error(404, "run_not_found", "No active run found for this session")
+        state = _sync_persistent_state()
         return state
 
     @app.post("/api/run/{run_id}/approve")
@@ -631,5 +685,21 @@ def create_app(
             )
         queue["lastUpdated"] = _now_iso()
         return {"queue": queue, "mode": desired_mode}
+
+    # Ensure the SPA shell under '/ui' isn't cached between local builds.
+    if hasattr(app, "middleware"):
+        @app.middleware("http")
+        async def _no_store_ui_index(request, call_next):  # type: ignore[override]
+            response = await call_next(request)
+            try:
+                path = request.url.path  # FastAPI Request
+            except Exception:
+                path = request.scope.get("path", "")
+            if path in ("/ui", "/ui/") or path.endswith("/ui/index.html"):
+                try:
+                    response.headers["Cache-Control"] = "no-store"
+                except Exception:
+                    pass
+            return response
 
     return app

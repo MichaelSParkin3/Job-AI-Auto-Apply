@@ -116,14 +116,8 @@ async function extractErrorMessage(response: Response): Promise<string> {
   return detail || "Request failed";
 }
 
-export async function createPreviewRun(): Promise<PreviewResponse> {
-  const response = await fetch("/api/run/preview", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ dryRun: true }),
-  });
+export async function fetchCurrentRun(): Promise<PreviewResponse> {
+  const response = await fetch("/api/run/current");
   return parseJson<PreviewResponse>(response);
 }
 

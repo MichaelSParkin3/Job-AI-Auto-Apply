@@ -2415,6 +2415,57 @@ def preview_demo(
     )
 
 
+@preview_app.command("run")
+def preview_run(
+    run_id: str = typer.Argument(..., help="Existing run identifier to preview."),
+    no_browser: bool = typer.Option(
+        False,
+        "--no-browser",
+        help="Skip launching Chrome in app-mode; server still runs.",
+    ),
+    port: Optional[int] = typer.Option(
+        None,
+        "--port",
+        min=1024,
+        max=65535,
+        help="Override preview server port (defaults to config value).",
+    ),
+):
+    """Start the preview server for an existing automation run."""
+
+    overrides: dict[str, object] = {}
+    if port is not None:
+        overrides["preview_port"] = port
+    settings = Settings.load(overrides=overrides or None)
+    base = get_base_dir()
+    run_store = RunStore(base=base)
+    try:
+        run_record = run_store.load_run_record(run_id)
+    except FileNotFoundError:
+        typer.secho(f"Run '{run_id}' not found.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    payload = run_store.load_run_payload(run_record)
+    metadata = payload.get("metadata") if isinstance(payload, dict) else {}
+    mode = metadata.get("mode") if isinstance(metadata, dict) else None
+    is_demo = (mode == "demo")
+    run_store.load_queue_snapshot(run_record)
+
+    typer.echo(
+        f"Starting preview server for run {run_record.id} "
+        f"(profile={run_record.profile_id or 'unknown'}, port={settings.preview_port})."
+    )
+    run_preview_service(
+        settings,
+        demo=is_demo,
+        open_browser=not no_browser,
+        run_record=run_record,
+        run_store=run_store,
+        history_writer=None,
+        run_context=None,
+    )
+
+
 @profiles_app.command("new")
 def profiles_new(
     profile_id: str = typer.Argument(..., help="Profile identifier (slug)."),

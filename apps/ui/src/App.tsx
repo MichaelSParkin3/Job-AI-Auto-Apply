@@ -1,14 +1,14 @@
 import * as React from "react";
 
 import {
-  createPreviewRun,
-  editRun,
+  fetchCurrentRun,
   fetchQueueSnapshot,
-  overrideCandidateMode,
   submitQueueDecision,
-  type ApplicationCandidateSummary,
+  overrideCandidateMode,
+  editRun,
   type ReviewQueueSnapshot,
   type SubmissionDecision,
+  type ApplicationCandidateSummary,
 } from "./lib/api";
 import { DryRunBanner } from "./components/dry-run-banner";
 import { EditDialog } from "./components/edit-dialog";
@@ -140,10 +140,12 @@ const App: React.FC = () => {
 
   React.useEffect(() => {
     let mounted = true;
+    let attempts = 0;
     const bootstrap = async () => {
-      set({ status: "loading", message: undefined });
+      if (!mounted) return;
+      if (attempts === 0) set({ status: "loading", message: undefined });
       try {
-        const data = await createPreviewRun();
+        const data = await fetchCurrentRun();
         if (!mounted) return;
         set({
           runId: data.runId,
@@ -153,8 +155,15 @@ const App: React.FC = () => {
           metadata: data.metadata,
         });
       } catch (error) {
-        const description = error instanceof Error ? error.message : String(error);
-        set({ status: "error", message: description });
+        if (!mounted) return;
+        attempts += 1;
+        // Some servers warm the run state lazily; retry a few times before surfacing.
+        if (attempts <= 8) {
+          window.setTimeout(bootstrap, Math.min(500 * attempts, 2000));
+        } else {
+          const description = error instanceof Error ? error.message : String(error);
+          set({ status: "error", message: description });
+        }
       }
     };
     bootstrap();
