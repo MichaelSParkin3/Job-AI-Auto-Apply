@@ -1,7 +1,7 @@
 ﻿# Components
 
 ## CLI Orchestrator
-**Responsibility:** Parse args, load config/profile, coordinate browser actions, manage artifacts/history.
+**Responsibility:** Parse args, load config/profile, coordinate browser actions (including `ai_autofill` handoffs), manage artifacts/history.
 
 **Key Interfaces:**
 - Commands: `apply`, `profiles`, `config`, `history`, `scheduler plan`, `scheduler run`
@@ -21,7 +21,7 @@
 **Technology Stack:** FastAPI, Uvicorn (embedded)
 
 ## Browserâ€‘Use Controller
-**Responsibility:** Headful Chromium automation with stealth posture; deterministic fallbacks for upload/widgets.
+**Responsibility:** Headful Chromium automation with stealth posture; deterministic fallbacks for upload/widgets; executes LLM-guided auto fill + submit attempts with manual handoff support.
 
 **Key Interfaces:** High-level actions (visit, detect Quick Apply, fill forms, upload resume, collect review screenshot)
 
@@ -57,6 +57,13 @@
   CLI status line (attempts + simulated flag). Failures capture artifacts under `runs/<id>/resume/` and bubble structured
   diagnostics back to QA for investigation.
 
+### AutoFill Orchestrator (Epic 5)
+- `core/autofill/orchestrator.AutoFillOrchestrator` replays LLM-enriched plans inside Browser-Use, invoking higher-level actions (`fill_intent`, `resolve_widget`, `perform_submit`) and recording before/after DOM snapshots.
+- Telemetry emits `AUTOFILL_PLAN_READY`, `AUTOFILL_FIELD_FILLED/SKIPPED`, `AUTOFILL_UPLOAD_SUCCESS/FAILURE`, `AUTOFILL_HANDOFF_READY`, and `AUTOFILL_DEMO_COMPLETED`, all redacting PII via value length hashing.
+- Handoff snapshots serialize DOM selectors, field values, upload status, and scroll positions to `runs/<id>/handoff/<candidate>.json` alongside focused screenshots for the UI banner.
+- Resume API (`POST /api/run/{id}/handoff/{candidate}/launch`) calls back into the orchestrator to restore the Chrome session, replay saved intents without clicking submit, and expose a blocking future until the user confirms outcome.
+- Dry-run fixtures live under `apps/browser/tests/autofill/` and assert deterministic plan execution without starting Chrome by mocking Browser-Use primitives.
+
 ## Artifact & History Store
 **Responsibility:** Persist screenshots, `run.json`, HTML snapshot, redacted `actions.log`, append `history.jsonl`.
 
@@ -80,12 +87,12 @@
 
 **Key Interfaces:** `decide(candidate) -> SubmissionDecision`, `record_feedback(decisionId, override)`
 
-**Dependencies:** Profile policy (mode/thresholds), Browser-Use artifacts, OpenRouter model client, preview event bus
+**Dependencies:** Profile policy (mode/thresholds), Browser-Use artifacts, AutoFillOrchestrator handoff snapshots, OpenRouter model client, preview event bus
 
 **Technology Stack:** Python async worker (LLM), FastAPI binding (human)
 
 ## Review Queue Manager
-**Responsibility:** Maintain ordered backlog of candidates, track state transitions, expose APIs for UI/AI schedulers, and trigger fallbacks when SLA breached.
+**Responsibility:** Maintain ordered backlog of candidates, track state transitions (including `handoff_pending`), expose APIs for UI/AI schedulers, and trigger fallbacks when SLA breached.
 
 **Key Interfaces:** `enqueue(candidate)`, `peek(mode)`, `update(decision)`, `list(filter)`
 

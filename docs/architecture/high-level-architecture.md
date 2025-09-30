@@ -2,12 +2,12 @@
 
 ## Technical Summary
 - Architecture: Local-first, privacy-preserving monolith with clear modular boundaries. Python (Typer CLI + FastAPI preview server) orchestrates the full flow; a small React + Vite UI runs as static assets served by FastAPI.
-- Decision & Run Modes: The CLI now owns a pluggable decision engine that operates in three explicit run modes (`review`, `auto_review`, `auto_submit`) so we can support human approval, AI-assisted review, and unattended submission without branching the core pipeline.
+- Decision & Run Modes: The CLI now owns a pluggable decision engine that operates in explicit modes (`review`, `ai_autofill`, `auto_review`, `auto_submit`) so we can support human approval, AI-assisted form filling with assisted submit, and unattended submission without branching the core pipeline.
 - Frontend: React 18 + Vite + Tailwind + shadcn/ui, focused on a single Preview window to Approve/Edit/Abort. UI is small, offline-first, and keyboard-centric.
 - Backend: FastAPI app embedded alongside the CLI process provides Preview routes, serves static UI, and exposes a minimal REST API for the UI to control runs and edits.
-- Browser automation: Headful Chrome via Browserâ€‘Use + Playwright with a stealth posture, single-tab, profile-specific persistent session, deterministic fallbacks for uploads/widgets, and structured review artifacts (screenshots, DOM plans) shared with both human and AI decision engines.
+- Browser automation: Headful Chrome via Browserâ€‘Use + Playwright with a stealth posture, single-tab, profile-specific persistent session, deterministic fallbacks for uploads/widgets, and now an LLM-guided auto-fill executor that can hand the form back to humans when CAPTCHA or MFA is detected.
 - Storage: File-first artifacts (screenshots/video optional), `run.json`, HTML snapshots, and `history.jsonl`, now extended with decision audit trails (confidence, rationale) and queue snapshots so we can reconcile human and AI actions after the fact. Optional local SQLite index can be introduced later for search/analytics; not needed for MVP.
-- Goals alignment: Meets PRD privacy (local-only PII), reliability (95% success, retry), performance (â‰¤120s median), dedupe, and the new autonomy roadmap (AI-assist first, full auto second, scheduled runs last) without sacrificing auditability or user override controls.
+- Goals alignment: Meets PRD privacy (local-only PII), reliability (95% success, retry), performance (â‰¤120s median), dedupe, and the revised autonomy roadmap (LLM-driven auto fill proof, advisory AI, full auto, scheduler) without sacrificing auditability or user override controls.
 
 ## Platform and Infrastructure Choice
 **Options considered**

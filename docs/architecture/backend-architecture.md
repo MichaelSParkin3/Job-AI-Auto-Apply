@@ -2,7 +2,7 @@
 
 ## Service Architecture (Traditional Server)
 - FastAPI app mounted inside CLI process; threads for server lifecycle if needed.
-- Routes under `/api/run/*`; static UI under `/ui/*`.
+- Routes under `/api/run/*`; static UI under `/ui/*`. New `POST /api/run/{id}/handoff/{candidate}/launch` and `POST /api/queue/{id}/handoff-confirmation` endpoints orchestrate assisted submit resumes.
 - `/api/queue/*` endpoints expose the review backlog so both the UI and future schedulers can inspect or intervene without RPC hacks.
 
 ```py
@@ -19,7 +19,7 @@ async def start_preview(payload: dict):
 ## Database Architecture (File Repository)
 - `runs/{runId}/...` folder per run
 - `history/history.jsonl` append‑only with file lock
-- Queue snapshots (`runs/{runId}/queue.json`) capture the state machine at key checkpoints so AI and human actions can be audited post-run.
+- Queue snapshots (`runs/{runId}/queue.json`) capture the state machine at key checkpoints so AI and human actions (including `handoff_pending`) can be audited post-run. Auto-fill snapshots live under `runs/{runId}/handoff/` with hashed field metadata.
 - `decisions/` subfolder (per run) stores structured prompts/responses with redaction applied to PII-heavy context.
 
 ```py
@@ -30,7 +30,7 @@ class FileStore:
 ```
 
 ## Decision Engine Interfaces
-- `DecisionEngine` protocol accepts an `ApplicationCandidate` payload (posting summary, form plan, profile guidance) and returns a `SubmissionDecision`.
+- `DecisionEngine` protocol accepts an `ApplicationCandidate` payload (posting summary, form plan, profile guidance, optional handoff snapshot) and returns a `SubmissionDecision`.
 - Implementations:
   - `HumanDecisionEngine`: wraps FastAPI endpoints, blocking until `/queue/{id}/decision` is received.
   - `LLMDecisionEngine`: async task that composes prompts from stored artifacts, invokes the configured model, scores the response, and emits telemetry (`AUTO_DECISION`, `AUTO_OVERRIDE`).
@@ -54,7 +54,7 @@ sequenceDiagram
   API->>FS: save_run(run)
   API->>DEC: enqueue candidate / deliver decision
   DEC->>API: decision payload (approve/abort/edit)
-  API->>FS: append decision audit
+  API->>FS: append decision audit / autofill state
   API-->>UI: 200 {runId, preview, queueState}
 ```
 

@@ -10,7 +10,8 @@
 - Input Validation: pydantic models for all API routes
 - Rate Limiting: Not required (local); guard against rapid repeat actions
 - CORS: Same‑origin only
-- AI Mode Opt-In: Auto review and auto submit require profile-level consent; CLI refuses to start AI modes unless `profiles/<id>.yaml` sets `automation.allow_auto=true`.
+- AI Mode Opt-In: Auto review, AI auto fill, and auto submit require profile-level consent; CLI refuses to start AI modes unless `profiles/<id>.yaml` sets `automation.allow_auto=true`.
+- Handoff Snapshot Redaction: Saved form state stores hashed values + widget metadata only; raw answers never persist outside Browser-Use memory.
 - Prompt Redaction: Store AI prompts/responses encrypted-at-rest (local key) with hashes in logs; redact JD snippets beyond 500 characters.
 
 **Authentication Security**
@@ -27,6 +28,6 @@
 - Response Time Target: Preview API ≤ 50ms p50
 - Database Optimization: N/A (file I/O); minimize sync blocking
 - Caching: In‑process memo for small lookups
-- Decision Engine SLA: AI decisions should complete within 8s p95; queue watchdog escalates items exceeding 30s without response.
+- Decision Engine SLA: AI decisions should complete within 8s p95; queue watchdog escalates items exceeding 30s without response. Auto fill attempts should either submit or emit a handoff within 15s of final field entry to avoid session expiry.
 
 ---

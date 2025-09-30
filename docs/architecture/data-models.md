@@ -52,8 +52,9 @@ export interface JobPosting {
 **Key Attributes:**
 - `id`: string — run id
 - `profileId`: string — link to Profile
-- `mode`: `review|auto_review|auto_submit`
+- `mode`: `review|ai_autofill|auto_review|auto_submit`
 - `status`: `pending|review|auto_pending|submitting|success|error|aborted`
+- `autofill`: metadata about AI fill attempts (`attempted`, `blockedReason`, `handoffSnapshotPath`, `manualAttempts`, `lastLaunchedAt`)
 - `decisions[]`: ordered list of decision payloads with hashed rationales (see below)
 - `queue`: snapshot of outstanding candidates with state machine metadata and queue depth counters
 
@@ -63,7 +64,7 @@ export interface RunRecord {
   id: string;
   startedAt: string;
   profileId: string;
-  mode: "review" | "auto_review" | "auto_submit";
+  mode: "review" | "ai_autofill" | "auto_review" | "auto_submit";
   posting: JobPosting;
   preview: {
     screenshotPath?: string;
@@ -71,6 +72,13 @@ export interface RunRecord {
     approved: boolean;
     dryRun: boolean;
     suggestedDecision?: SubmissionDecision;
+  };
+  autofill?: {
+    attempted: boolean;
+    blockedReason?: "captcha" | "mfa" | "unknown_form_change";
+    handoffSnapshotPath?: string;
+    manualAttempts?: number;
+    lastLaunchedAt?: string;
   };
   submission?: {
     submittedAt?: string;
@@ -140,10 +148,33 @@ export interface ApplicationCandidateSummary {
   posting: Pick<JobPosting, "postingUrl" | "title" | "company" | "location">;
   formPlanPath: string;
   discoveredAt: string;
-  state: "discovered" | "planned" | "awaiting_decision" | "decided" | "submitted" | "shelved";
+  state: "discovered" | "planned" | "awaiting_decision" | "handoff_pending" | "decided" | "submitted" | "shelved";
   lastDecisionId?: string;
   assignedMode: "human" | "ai";
   updatedAt?: string;
+}
+```
+
+## AutoFillSnapshot
+**Purpose:** Persist AI-populated form state for manual assisted submit.
+
+**Key Attributes:**
+- `candidateId`: string — queue identifier
+- `fieldValues`: array of `{ selector, valueHash, widgetType }`
+- `resume`: `{ uploaded: boolean; path?: string }`
+- `blockedReason`: `captcha|mfa|unknown_form_change`
+- `capturedAt`: ISO timestamp
+
+```json
+{
+  "candidateId": "lever-123",
+  "blockedReason": "captcha",
+  "fieldValues": [
+    { "selector": "#first-name", "valueHash": "sha256:...", "widgetType": "text" },
+    { "selector": "#cover-letter", "valueHash": "sha256:...", "widgetType": "textarea" }
+  ],
+  "resume": { "uploaded": true, "path": "runs/2025-01-05/autofill/resume.pdf" },
+  "capturedAt": "2025-01-05T17:12:44Z"
 }
 ```
 
