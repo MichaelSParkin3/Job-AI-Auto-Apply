@@ -1,0 +1,47 @@
+schema: 1
+story: '5.2'
+story_title: 'Headful Browser-Use Auto Fill Execution'
+gate: FAIL
+status_reason: 'Executor stubs screenshot capture and omits failure telemetry, leaving audit artifacts incomplete and blocking acceptance criteria 1 and 3.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-12-18T00:00:00Z'
+
+top_issues:
+  - id: QA-5.2-1
+    severity: high
+    summary: 'AutofillExecutor._capture_screenshot writes empty files instead of invoking Browser-Use capture APIs, so no per-field evidence is produced.'
+    recommendation: 'Call the controller screenshot primitive (with selector scoping) and persist the returned bytes; fail the field when capture fails to maintain auditability.'
+  - id: QA-5.2-2
+    severity: high
+    summary: 'Selector fallback exhaustion returns a skipped result without emitting AUTOFILL_FIELD_SKIPPED telemetry, so monitoring misses real execution failures.'
+    recommendation: 'Emit AUTOFILL_FIELD_SKIPPED (with reason) whenever execution falls through all selectors, matching the skip path telemetry contract.'
+
+waiver:
+  active: false
+
+quality_score: 55
+expires: '2026-01-15T00:00:00Z'
+
+evidence:
+  tests_reviewed: 2
+  risks_identified: 2
+  trace:
+    ac_covered: [1, 2, 3, 5, 6]
+    ac_gaps: [1, 3, 4]
+    notes: 'Reviewed pytest suites core/tests/test_autofill_executor.py and apps/cli/tests/test_ai_autofill_command.py; gaps remain around artifact capture (screenshots) and guardrail telemetry coverage.'
+
+nfr_validation:
+  _assessed: [auditability, observability]
+  auditability:
+    status: FAIL
+    notes: 'Empty screenshot placeholders violate artifact requirements for compliance reviews and prevent manual verification of fills.'
+  observability:
+    status: FAIL
+    notes: 'Missing AUTOFILL_FIELD_SKIPPED telemetry on selector exhaustion hides real-world failures from monitoring dashboards.'
+
+recommendations:
+  immediate:
+    - 'Implement screenshot capture through Browser-Use controller APIs and include error handling for partial captures.'
+    - 'Emit AUTOFILL_FIELD_SKIPPED telemetry (with hashed previews when available) on fallback exhaustion and dry-run skips.'
+  future:
+    - 'Backfill integration coverage for guardrail breach telemetry once action allowlist is implemented.'
