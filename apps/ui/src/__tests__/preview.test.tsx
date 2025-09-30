@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import App from "../App";
 import { usePreviewStore } from "../store/preview-store";
@@ -69,6 +76,18 @@ function mockError(message: string, status = 400) {
   } as Response;
 }
 
+async function closeQueueDrawer(user: ReturnType<typeof userEvent.setup>) {
+  const hideButton = await screen.findByRole("button", {
+    name: /Close queue drawer/i,
+  });
+  await user.click(hideButton);
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("dialog", { name: /Review Queue/i })
+    ).not.toBeInTheDocument()
+  );
+}
+
 describe("Preview App queue workflow", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -104,6 +123,7 @@ describe("Preview App queue workflow", () => {
   });
 
   it("navigates with J shortcut and approves once while busy", async () => {
+    const user = userEvent.setup();
     const updatedQueue = {
       ...baseQueueSnapshot,
       pending: [baseQueueSnapshot.pending[0]],
@@ -142,6 +162,8 @@ describe("Preview App queue workflow", () => {
       expect(screen.getAllByText(/Frontend Developer/i).length).toBeGreaterThan(0)
     );
 
+    await closeQueueDrawer(user);
+
     fireEvent.keyDown(window, { key: "j" });
 
     await waitFor(() => {
@@ -179,6 +201,7 @@ describe("Preview App queue workflow", () => {
   });
 
   it("rolls back optimistic decision on error and surfaces message", async () => {
+    const user = userEvent.setup();
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(mockResponse(mockPreviewResponse))
@@ -194,11 +217,12 @@ describe("Preview App queue workflow", () => {
       expect(screen.getAllByText(/Frontend Developer/i).length).toBeGreaterThan(0)
     );
 
+    await closeQueueDrawer(user);
+
     fireEvent.keyDown(window, { key: "A", shiftKey: true });
 
-    await waitFor(() =>
-      expect(screen.getByText(/Queue conflict/i)).toBeInTheDocument()
-    );
+    const errorMessages = await screen.findAllByText(/Queue conflict/i);
+    expect(errorMessages.length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Frontend Developer/i).length).toBeGreaterThan(0);
   });
 
@@ -227,6 +251,7 @@ describe("Preview App queue workflow", () => {
   });
 
   it("submits escalate decision with Shift+X", async () => {
+    const user = userEvent.setup();
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(mockResponse(mockPreviewResponse))
@@ -242,6 +267,9 @@ describe("Preview App queue workflow", () => {
     await waitFor(() =>
       expect(screen.getAllByText(/Frontend Developer/i).length).toBeGreaterThan(0)
     );
+
+    await closeQueueDrawer(user);
+
     await waitFor(() =>
       expect(
         screen.queryByRole("button", { name: /Escalate/i })
@@ -261,5 +289,47 @@ describe("Preview App queue workflow", () => {
     expect(decisionCall).toBeDefined();
     const decisionBody = JSON.parse((decisionCall?.[1] as RequestInit).body as string);
     expect(decisionBody.outcome).toBe("needs_review");
+  });
+
+  it("traps focus within queue drawer and closes with Escape", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse(mockPreviewResponse))
+      .mockResolvedValueOnce(mockResponse(baseQueueSnapshot));
+
+    // @ts-expect-error set global fetch for tests
+    global.fetch = fetchMock as FetchMock;
+
+    render(<App />);
+
+    const drawer = await screen.findByRole("dialog", { name: /Review Queue/i });
+    expect(drawer).toBeInTheDocument();
+
+    const closeButton = await screen.findByRole("button", {
+      name: /Close queue drawer/i,
+    });
+
+    await waitFor(() => expect(closeButton).toHaveFocus());
+
+    await user.tab();
+    const firstCandidate = await screen.findByRole("button", {
+      name: /Frontend Developer/i,
+    });
+    expect(firstCandidate).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(closeButton).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(usePreviewStore.getState().drawerOpen).toBe(false));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: /Review Queue/i })
+      ).not.toBeInTheDocument()
+    );
+    expect(
+      screen.getByRole("button", { name: /Show Queue/i })
+    ).toBeInTheDocument();
   });
 });
