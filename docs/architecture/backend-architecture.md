@@ -20,6 +20,7 @@ async def start_preview(payload: dict):
 - `runs/{runId}/...` folder per run
 - `history/history.jsonl` append‑only with file lock
 - Queue snapshots (`runs/{runId}/queue.json`) capture the state machine at key checkpoints so AI and human actions (including `handoff_pending`) can be audited post-run. Auto-fill snapshots live under `runs/{runId}/handoff/` with hashed field metadata.
+- Lever enrichment outputs persist under `runs/{runId}/plans/{candidateId}.json` with SHA-256 siblings and hashed prompt bundles in `runs/{runId}/autofill/prompts/`, keeping review queue payloads lightweight while preserving audit trails.
 - `decisions/` subfolder (per run) stores structured prompts/responses with redaction applied to PII-heavy context.
 
 ```py

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from dataclasses import dataclass
+from html import unescape
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Sequence
-
-from html import unescape
 
 
 def _normalize_label(text: str) -> str:

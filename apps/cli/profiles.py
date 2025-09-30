@@ -447,6 +447,16 @@ class ProfileConfig(BaseModel):
             alias="google_cse_cx",
             description="Programmable Search engine identifier",
         )
+        model: str | None = Field(
+            default=None,
+            alias="model",
+            description="LLM model to use for plan refinement",
+        )
+        llm_enabled: bool | None = Field(
+            default=None,
+            alias="llm_enabled",
+            description="Enable LLM enrichment for plan refinement",
+        )
 
         model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
@@ -560,6 +570,10 @@ class ProfileConfig(BaseModel):
             overrides["google_cse_key"] = self.plan.google_cse_key.strip()
         if self.plan.google_cse_cx:
             overrides["google_cse_cx"] = self.plan.google_cse_cx.strip()
+        if self.plan.model:
+            overrides["model"] = self.plan.model.strip()
+        if self.plan.llm_enabled is not None:
+            overrides["llm_enabled"] = bool(self.plan.llm_enabled)
         return overrides
 
 

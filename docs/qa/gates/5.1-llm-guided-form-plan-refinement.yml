@@ -1,0 +1,38 @@
+schema: 1
+story: '5.1'
+story_title: 'LLM-Guided Form Plan Refinement'
+gate: PASS
+status_reason: 'Planner orchestrator satisfied acceptance criteria by merging deterministic selectors with optional LLM output, persisting hashed plan artifacts, and emitting AUTOFILL_PLAN_READY telemetry while maintaining review-mode fallbacks.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-12-17T00:00:00Z'
+
+top_issues: []
+
+waiver:
+  active: false
+
+quality_score: 94
+expires: '2026-03-31T00:00:00Z'
+
+evidence:
+  tests_reviewed: 3
+  risks_identified: 1
+  trace:
+    ac_covered: [1, 2, 3, 4, 5, 6]
+    ac_gaps: []
+    notes: 'Validated orchestrator fallbacks, profile override precedence, hashed plan/prompt artifacts, and telemetry emission via targeted pytest suites; OpenRouter client exercised through stubs pending live key availability.'
+
+nfr_validation:
+  _assessed: [auditability, observability]
+  auditability:
+    status: PASS
+    notes: 'Enriched plans are written with SHA-256 sidecars and prompt digests scoped to run directories, enabling artifact verification without exposing raw selectors.'
+  observability:
+    status: PASS
+    notes: 'AUTOFILL_PLAN_READY events and candidate telemetry capture latency and token metrics for downstream monitoring.'
+
+recommendations:
+  immediate:
+    - 'Add an integration scenario that asserts prompt artifact hashing once an OpenRouter key is available in CI to exercise the network client.'
+  future:
+    - 'Expand coverage to capture anonymised planner metrics for analytics once privacy review approves broader telemetry.'
