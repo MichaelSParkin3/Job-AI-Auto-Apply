@@ -1,0 +1,46 @@
+schema: 1
+story: '4.2'
+story_title: 'Review Queue Persistence and APIs'
+gate: FAIL
+status_reason: 'Approved queue decisions remain in decided state instead of transitioning to submitted, leaving AC #2 incomplete despite passing persistence/API tests.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-12-07T00:00:00Z'
+
+top_issues:
+  - id: QA-4.2-1
+    severity: high
+    summary: 'Approved decisions are never promoted beyond decided state.'
+    recommendation: 'Update ReviewQueueManager.record_decision (and related tests) to advance approved outcomes to submitted or otherwise fulfill the decided → submitted transition promised in AC #2.'
+  - id: QA-4.2-2
+    severity: medium
+    summary: 'Preview API tests require manual installation of fastapi/httpx before pytest can run.'
+    recommendation: 'Document and automate Python dependency installation (e.g., pip install -e . or dedicated preview extra) in README/QA notes so queue endpoint tests run without manual intervention.'
+
+waiver:
+  active: false
+
+quality_score: 65
+expires: '2025-12-21T00:00:00Z'
+
+evidence:
+  tests_reviewed: 3
+  risks_identified: 2
+  trace:
+    ac_covered: [1, 3, 4, 5]
+    ac_gaps: [2]
+    notes: '`pytest apps/preview/tests/test_queue_endpoints.py` + supporting suites verify API validation/persistence, but queue state never reaches submitted after approval.'
+
+nfr_validation:
+  _assessed: [reliability, maintainability]
+  reliability:
+    status: FAIL
+    notes: 'Decision approvals do not advance queue state to submitted, forcing manual clean-up and risking duplicate submissions.'
+  maintainability:
+    status: PASS
+    notes: 'Centralized queue manager encapsulates state transitions/persistence, and tests provide regression coverage once state issue is addressed.'
+
+recommendations:
+  immediate:
+    - 'Add submitted-state handling for approved decisions and cover with CLI/API tests that assert the final queue snapshot.'
+  future:
+    - 'Provide a documented dependency bootstrap (pip install fastapi httpx) in QA/readme scripts so preview API suites execute without manual steps.'
