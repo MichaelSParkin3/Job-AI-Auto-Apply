@@ -77,6 +77,7 @@ from .config_loader import (
 )
 from .history_store import HistoryWriter
 from .profiles import ProfileAnswerResolver, ProfileBinding, ProfileService
+from .queue_manager import ApplicationCandidate, ReviewQueueManager
 from .run_store import RunStore
 from .runtime_state import get_run_context, set_run_context
 from .utils import ApiError, log_event
@@ -616,22 +617,6 @@ def _discover_candidates_with_browser(
         "mode": "browser",
         "summary": {"pages": len(artifacts), "results": len(results)},
     }
-def _queue_upsert(snapshot: dict[str, Any], entry: Mapping[str, Any]) -> None:
-    """Insert or update a pending queue entry in-place."""
-
-    pending = snapshot.setdefault("pending", [])
-    found = False
-    for index, existing in enumerate(pending):
-        if existing.get("id") == entry.get("id"):
-            updated = dict(existing)
-            updated.update(entry)
-            pending[index] = updated
-            found = True
-            break
-    if not found:
-        pending.append(dict(entry))
-    snapshot["lastUpdated"] = _iso_now()
-
 def _load_profile_search_defaults(
     service: ProfileService, profile_id: str
 ) -> tuple[Any, Any, list[str], str | None, str]:
@@ -1128,7 +1113,11 @@ def apply_run(
         step_lookup=resume_step_lookup,
     )
 
-    queue_snapshot = run_store.load_queue_snapshot(run_record)
+    queue_manager = ReviewQueueManager(
+        run_store=run_store,
+        run_record=run_record,
+        mode=mode,
+    )
     processed = 0
 
     for candidate in candidates:
@@ -1151,15 +1140,14 @@ def apply_run(
             "location": None,
         }
 
-        queue_entry = {
-            "id": candidate_id,
-            "posting": posting_payload,
-            "formPlanPath": str(form_plan_path),
-            "discoveredAt": discovered_at,
-            "state": "discovered",
-        }
-        _queue_upsert(queue_snapshot, queue_entry)
-        run_store.save_queue_snapshot(run_record, queue_snapshot)
+        queue_candidate = ApplicationCandidate(
+            id=candidate_id,
+            posting=posting_payload,
+            form_plan_path=str(form_plan_path),
+            discovered_at=discovered_at,
+            state="discovered",
+        )
+        queue_manager.enqueue(queue_candidate)
 
         candidate_payload: dict[str, Any] = {
             "id": candidate_id,
@@ -1187,9 +1175,7 @@ def apply_run(
         run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
 
         if navigation.status != "ok" or not navigation.html:
-            queue_entry["state"] = "shelved"
-            _queue_upsert(queue_snapshot, queue_entry)
-            run_store.save_queue_snapshot(run_record, queue_snapshot)
+            queue_manager.update_state(candidate_id, "shelved")
             candidate_payload["state"] = "shelved"
             run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
             continue
@@ -1199,9 +1185,11 @@ def apply_run(
         form_plan_path.write_text(
             json.dumps(plan_json, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        queue_entry["state"] = "planned"
-        _queue_upsert(queue_snapshot, queue_entry)
-        run_store.save_queue_snapshot(run_record, queue_snapshot)
+        queue_manager.update_state(
+            candidate_id,
+            "planned",
+            form_plan_path=str(form_plan_path),
+        )
         candidate_payload["formPlan"] = {"path": str(form_plan_path), "fields": len(plan_result.fields)}
         run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
 
@@ -1268,16 +1256,14 @@ def apply_run(
             screenshot=preview_result.screenshot,
         )
 
-        queue_entry["state"] = "awaiting_decision"
-        _queue_upsert(queue_snapshot, queue_entry)
-        run_store.save_queue_snapshot(run_record, queue_snapshot)
+        queue_manager.update_state(candidate_id, "awaiting_decision")
 
         processed += 1
 
     summary_output = {
         "runId": run_record.id,
         "candidatesProcessed": processed,
-        "queuePending": len(queue_snapshot.get("pending", [])),
+        "queuePending": len(queue_manager.snapshot.pending),
     }
     typer.echo(json.dumps(summary_output, ensure_ascii=False))
     set_run_context(None)

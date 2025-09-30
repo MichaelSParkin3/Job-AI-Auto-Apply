@@ -577,9 +577,23 @@ class RunStore:
     def load_queue_snapshot(self, record: RunRecord) -> Dict[str, Any]:
         """Load the queue snapshot for the given run."""
 
+        payload = self._load_run_json(record.run_json_path)
+        mode = (
+            payload.get("metadata", {}).get("mode")
+            or payload.get("mode")
+            or "review"
+        )
         if record.queue_path.exists():
-            return json.loads(record.queue_path.read_text(encoding="utf-8"))
-        queue = _empty_queue_snapshot("review")
+            queue_payload = json.loads(record.queue_path.read_text(encoding="utf-8"))
+            if "mode" not in queue_payload:
+                queue_payload["mode"] = mode
+            payload["queue"] = queue_payload
+            self._write_run_json(record.run_json_path, payload)
+            return queue_payload
+        queue = payload.get("queue") or _empty_queue_snapshot(mode)
+        queue.setdefault("mode", mode)
+        payload["queue"] = queue
+        self._write_run_json(record.run_json_path, payload)
         record.queue_path.write_text(
             json.dumps(queue, indent=2, ensure_ascii=False), encoding="utf-8"
         )
@@ -597,6 +611,23 @@ class RunStore:
             json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8"
         )
         return payload["queue"]
+
+    def record_submission_decision(
+        self, record: RunRecord, decision: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        """Append or update a submission decision for the given run."""
+
+        payload = self._load_run_json(record.run_json_path)
+        decisions = payload.setdefault("decisions", [])
+        decision_payload = json.loads(json.dumps(decision, ensure_ascii=False))
+        for index, existing in enumerate(decisions):
+            if existing.get("decisionId") == decision_payload.get("decisionId"):
+                decisions[index] = decision_payload
+                break
+        else:
+            decisions.append(decision_payload)
+        self._write_run_json(record.run_json_path, payload)
+        return decision_payload
 
     def upsert_lever_candidate(
         self, record: RunRecord, candidate_id: str, payload: Mapping[str, Any]

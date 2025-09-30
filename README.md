@@ -65,7 +65,7 @@ python -m venv .venv
 pip install -U pip
 pip install -e .[dev]
 # If your Python < 3.11 or editable install fails, install minimal deps:
-# pip install typer python-dotenv PyYAML pytest
+# pip install typer python-dotenv PyYAML fastapi httpx pytest
 
 # Install UI dependencies (from repo root)
 pnpm install
@@ -116,6 +116,19 @@ Running `python app.py apply demo --dry-run --limit 1` creates a run folder simi
 ```json
 {"fingerprint":"20240926-120000-abcdef12","id":"20240926-120000-abcdef12","postingUrl":"demo://placeholder","profileId":"","runPath":"runs/20240926-120000-abcdef12","status":"demo","summary":"Demo run initialized; actions.log will contain redacted events.","timestamp":"2024-09-26T12:00:00Z"}
 ```
+
+## Testing
+
+The queue persistence and preview API suites require both FastAPI and HTTPX. Install the editable project (or the `dev` extra) before running pytest so these dependencies are available:
+
+```bash
+pip install -e .[dev]
+pytest apps/cli/tests/test_queue_manager.py
+pytest apps/preview/tests/test_queue_endpoints.py
+pytest sites/lever/tests/test_lever_queue_restart.py
+```
+
+If you prefer a minimal install, include `fastapi` and `httpx` alongside `pytest` as shown in the setup section above.
 
 ## Browser‑Use 0.7.x Notes
 - Event‑driven lifecycle: we adapt Browser‑Use’s async `BrowserSession` to synchronous CLI primitives. On launch we wait for `BrowserConnectedEvent`/focus; if the browser opens on `chrome://newtab` or Google, we issue a CDP `Page.navigate` fallback to your target URL.
