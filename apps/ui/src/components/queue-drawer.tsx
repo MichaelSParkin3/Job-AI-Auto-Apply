@@ -91,7 +91,6 @@ export function QueueDrawer({
               handleClose();
             }
           }}
-          aria-describedby="queue-drawer-description"
         >
           <div
             className="flex items-center justify-between border-b px-4 py-3"
@@ -112,9 +111,13 @@ export function QueueDrawer({
               </button>
             </DialogPrimitive.Close>
           </div>
-          <p id="queue-drawer-description" className="sr-only" data-queue-drawer>
+          <DialogPrimitive.Description
+            id="queue-drawer-description"
+            className="sr-only"
+            data-queue-drawer
+          >
             Review queue details for pending, escalated, and decided candidates. Focus remains inside the drawer while it is open.
-          </p>
+          </DialogPrimitive.Description>
           <div className="h-full overflow-y-auto px-4 pb-6 pt-3 text-sm" data-queue-drawer>
             <StatusSection
               label="Pending"

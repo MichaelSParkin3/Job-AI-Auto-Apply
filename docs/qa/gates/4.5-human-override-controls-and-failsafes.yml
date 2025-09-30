@@ -1,21 +1,17 @@
 schema: 1
 story: '4.5'
 story_title: 'Human Override Controls & Failsafes'
-gate: WARN
-status_reason: 'Core override workflows pass automated coverage, but the preview dialog still emits Radix description warnings, leaving accessibility polish unfinished.'
+gate: PASS
+status_reason: 'Queue drawer dialog now provides a Radix Description element, eliminating accessibility warnings and supplying screen-reader context.'
 reviewer: 'QA (Test Architect)'
-updated: '2025-12-14T00:00:00Z'
+updated: '2025-12-14T12:00:00Z'
 
-top_issues:
-  - id: AX1
-    title: 'Preview dialog missing accessible description'
-    severity: WARN
-    detail: 'Vitest run logs "Missing `Description` or `aria-describedby`" for the queue drawer dialog; take-back banner relies on the same surface, so users with screen readers still lack descriptive context.'
+top_issues: []
 
 waiver:
   active: false
 
-quality_score: 88
+quality_score: 98
 expires: '2026-01-20T00:00:00Z'
 
 evidence:
@@ -24,19 +20,19 @@ evidence:
   trace:
     ac_covered: [1, 2, 3, 4, 5]
     ac_gaps: []
-    notes: 'Validated queue override API, CLI reassignment, watchdog requeue flows, and preview banner UX through pytest suites and Vitest run; hashed rationale persistence confirmed during CLI manager assertions.'
+    notes: 'Validated queue override API, CLI reassignment, watchdog requeue flows, and preview banner UX through pytest suites and Vitest run; hashed rationale persistence confirmed during CLI manager assertions and queue drawer description asserted for accessibility.'
 
 nfr_validation:
   _assessed: [accessibility, auditability]
   accessibility:
-    status: WARN
-    notes: 'Dialog warnings indicate missing description wiring; focus handling remains intact but descriptive text is absent.'
+    status: PASS
+    notes: 'Queue drawer exposes a Radix Description node with contextual copy; Vitest assertion guards against regressions.'
   auditability:
     status: PASS
     notes: 'Queue manager tests confirm hashed rationale persistence and telemetry payloads continue to include override metadata.'
 
 recommendations:
   immediate:
-    - 'Wire a `DialogPrimitive.Description` (or equivalent aria-describedby element) into the queue drawer so Radix stops warning and screen readers gain context for override actions.'
+    - 'Maintain the Radix description coverage during UI refactors; keep the Vitest assertion intact when touching the queue drawer.'
   future:
-    - 'Add a Vitest assertion to ensure the dialog exposes a description string, preventing regressions once the accessibility fix lands.'
+    - 'Audit other Radix dialogs to ensure each exposes titles and descriptions with automated test coverage.'

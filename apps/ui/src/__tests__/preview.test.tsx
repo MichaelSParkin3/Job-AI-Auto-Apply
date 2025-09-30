@@ -118,6 +118,10 @@ describe("Preview App queue workflow", () => {
     expect(
       screen.getByRole("heading", { name: /Review Queue/i })
     ).toBeInTheDocument();
+    const drawerDialog = screen.getByRole("dialog", { name: /Review Queue/i });
+    expect(drawerDialog).toHaveAccessibleDescription(
+      /Review queue details for pending, escalated, and decided candidates/i
+    );
     expect(screen.getByLabelText(/Pending count 2/i)).toHaveTextContent("2");
     expect(screen.getByLabelText(/Escalated count 1/i)).toHaveTextContent("1");
     const activeSection = screen.getByText(/Active Candidate/i).closest("section");
