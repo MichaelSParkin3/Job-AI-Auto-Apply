@@ -62,6 +62,7 @@ from apps.browser import (
     SessionBackupManager,
 )
 from apps.preview.runner import run_preview_service
+from core.autofill.executor import AutofillExecutor, LeverAutofillField, LeverAutofillPlan
 from core.autofill.planner import (
     AutofillPlannerConfig,
     AutofillPlannerOrchestrator,
@@ -977,9 +978,9 @@ def apply_run(
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=2)
-    if mode != "review":
+    if mode not in {"review", "ai_autofill"}:
         typer.secho(
-            "Only review mode is supported for Lever automation runs in Epic 4.",
+            "Unsupported mode. Choose from review or ai_autofill.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=2)
@@ -1114,6 +1115,33 @@ def apply_run(
         typer.secho(f"Failed to load Lever form selectors: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
+    plan_llm_enabled_value = bool(settings.plan_llm_enabled)
+    if plan_llm is not None:
+        plan_llm_enabled_value = bool(plan_llm)
+    elif profile_config is not None:
+        try:
+            overrides = profile_config.resolved_plan_overrides()
+        except AttributeError:
+            overrides = {}
+        if isinstance(overrides, Mapping) and overrides.get("llm_enabled") is not None:
+            plan_llm_enabled_value = bool(overrides["llm_enabled"])
+
+    planner_model_value = (
+        plan_model
+        or settings.plan_model
+        or settings.OPENROUTER_MODEL
+        or settings.browser_model
+    )
+    if not planner_model_value and profile_config is not None:
+        try:
+            overrides = profile_config.resolved_plan_overrides()
+        except AttributeError:
+            overrides = {}
+        if isinstance(overrides, Mapping) and overrides.get("model"):
+            planner_model_value = overrides.get("model")
+    if not planner_model_value:
+        planner_model_value = settings.browser_model or ""
+
     openrouter_key = settings.OPENROUTER_API_KEY or ""
     enable_llm = bool(plan_llm_enabled_value and openrouter_key)
     if plan_llm_enabled_value and not openrouter_key:
@@ -1129,7 +1157,7 @@ def apply_run(
         try:
             llm_client = OpenRouterPlannerClient(
                 api_key=openrouter_key,
-                model=str(planner_model),
+                model=str(planner_model_value),
             )
         except Exception as exc:  # pragma: no cover - network/requests guard
             log_event(
@@ -1142,7 +1170,7 @@ def apply_run(
             )
             enable_llm = False
             llm_client = None
-    planner_config = AutofillPlannerConfig(model=str(planner_model), enable_llm=enable_llm)
+    planner_config = AutofillPlannerConfig(model=str(planner_model_value), enable_llm=enable_llm)
     planner_orchestrator = AutofillPlannerOrchestrator(
         config=planner_config,
         llm_client=llm_client,
@@ -1156,6 +1184,13 @@ def apply_run(
         source=effective_source,
         plan_payload=plan_payload,
         profile_binding=binding.cli_payload(),
+    )
+
+    run_store.record_browser_session(
+        run_record,
+        session_id=controller.session_id,
+        user_data_dir=binding.user_data_dir,
+        model=str(effective_model),
     )
 
     lever_dir = run_record.run_dir / "lever"
@@ -1372,6 +1407,82 @@ def apply_run(
                 "confidence": enriched_plan_result.telemetry.average_confidence,
             }
         )
+
+        if mode == "ai_autofill" and enriched_plan_result.intents:
+            autofill_fields = [
+                LeverAutofillField(
+                    key=intent.key,
+                    value_key=intent.value_key,
+                    label=intent.label,
+                    selector=intent.selector,
+                    field_type=intent.field_type or "text",
+                    strategy=intent.strategy,
+                    fallback_selector=intent.fallback_selector or None,
+                    metadata=intent.metadata,
+                )
+                for intent in enriched_plan_result.intents
+            ]
+            autofill_plan = LeverAutofillPlan(
+                candidate_id=candidate_id,
+                fields=autofill_fields,
+                resume_selector=plan_result.resume_selector,
+                llm_used=enriched_plan_result.llm_used,
+            )
+            autofill_executor = AutofillExecutor(
+                controller=controller,
+                run_dir=run_record.run_dir,
+                telemetry_callback=log_event,
+                dry_run=dry_run,
+            )
+            try:
+                execution_result = autofill_executor.execute(
+                    autofill_plan, answers=answers
+                )
+            except Exception as exc:  # pragma: no cover - defensive autopfill guard
+                log_event(
+                    {
+                        "level": "error",
+                        "event": "AUTOFILL_EXECUTION_FAILED",
+                        "candidateId": candidate_id,
+                        "error": str(exc),
+                    }
+                )
+            else:
+                execution_payload = execution_result.to_payload()
+                execution_path = autofill_dir / f"{candidate_id}-execution.json"
+                execution_path.write_text(
+                    json.dumps(execution_payload, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                candidate_payload.setdefault("autofill", {})["execution"] = {
+                    "path": str(execution_path),
+                    "filled": execution_result.filled(),
+                    "skipped": execution_result.skipped(),
+                }
+                screenshots_dir = run_record.run_dir / "autofill" / "screenshots"
+                html_dir = run_record.run_dir / "autofill" / "html"
+                candidate_payload["artifacts"]["autofillScreenshots"] = str(
+                    screenshots_dir
+                )
+                candidate_payload["artifacts"]["autofillHtml"] = str(html_dir)
+                candidate_payload.setdefault("telemetry", {})[
+                    "autofillExecution"
+                ] = {
+                    "filled": execution_result.filled(),
+                    "skipped": execution_result.skipped(),
+                }
+                run_store.upsert_lever_candidate(
+                    run_record, candidate_id, candidate_payload
+                )
+                log_event(
+                    {
+                        "event": "AUTOFILL_EXECUTION_COMPLETED",
+                        "candidateId": candidate_id,
+                        "filled": execution_result.filled(),
+                        "skipped": execution_result.skipped(),
+                        "dryRun": dry_run,
+                    }
+                )
 
         form_summary = executor.execute(plan_result, profile_answers=answers)
         form_summary_path.write_text(
