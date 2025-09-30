@@ -133,47 +133,13 @@ What happens:
 - `queue.json` tracks candidate state (`discovered → planned → awaiting_decision`).
 - Console output logs queue transitions and summary counts.
 
-### Step 5 – Review candidates in the preview UI
-The preview server must load the same run id you just generated. The quickest way today is to launch the preview runner with that run record:
+### Step 5 - Review candidates in the preview UI
+Once `apply run` completes, note the run id printed in the logs (or use the newest folder under `runs\`). Launch the preview UI for that run:
 ```powershell
-$runId = "20250930-045625-0805f893"  # replace with your run id
-python - <<'PY'
-from __future__ import annotations
-import json
-from datetime import datetime
-from pathlib import Path
-from apps.cli.config_loader import Settings, get_base_dir
-from apps.cli.run_store import RunStore, RunRecord
-from apps.preview.runner import run_preview_service
+python app.py preview run 20250930-045625-0805f893  # replace with your run id
+```
+Add `--no-browser` if you prefer to open http://localhost:4950/ui manually.
 
-RUN_ID = "${runId}"
-base = get_base_dir()
-run_dir = base / "runs" / RUN_ID
-payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-started_at = datetime.fromisoformat(payload["startedAt"].replace("Z", "+00:00"))
-record = RunRecord(
-    id=RUN_ID,
-    started_at=started_at,
-    run_dir=run_dir,
-    run_json_path=run_dir / "run.json",
-    logs_path=run_dir / "actions.log",
-    profile_id=payload.get("profileId"),
-    screenshot_path=None,
-)
-settings = Settings.load()
-run_preview_service(
-    settings,
-    demo=False,
-    open_browser=True,
-    run_record=record,
-    run_store=RunStore(base=base),
-)
-PY
-```
-Or copy/paste a single-line alternative (replace the run id):
-```powershell
-python -c "import json; from datetime import datetime; from apps.cli.config_loader import Settings, get_base_dir; from apps.cli.run_store import RunStore, RunRecord; from apps.preview.runner import run_preview_service; RUN_ID='20250930-045625-0805f893'; base=get_base_dir(); run_dir=base/'runs'/RUN_ID; payload=json.loads((run_dir/'run.json').read_text(encoding='utf-8')); started_at=datetime.fromisoformat(payload['startedAt'].replace('Z','+00:00')); record=RunRecord(id=RUN_ID, started_at=started_at, run_dir=run_dir, run_json_path=run_dir/'run.json', logs_path=run_dir/'actions.log', profile_id=payload.get('profileId'), screenshot_path=None); settings=Settings.load(); run_preview_service(settings, demo=False, open_browser=True, run_record=record, run_store=RunStore(base=base))"
-```
 Once the preview UI opens:
 - The queue drawer lists all `pending` / `escalated` candidates.
 - Keyboard shortcuts: `Shift+A` approve, `Shift+X` escalate, `J/K` navigate, `Shift+?` toggle legend.
@@ -181,7 +147,7 @@ Once the preview UI opens:
 
 You can always inspect `runs/<runId>/queue.json` manually if you only need the data.
 
-### Step 6 – Explore the dry-run demo
+### Step 6 - Explore the dry-run demo
 Use this when you just want the preview experience without real automation:
 ```powershell
 python app.py apply demo --dry-run --limit 1       # opens Chrome app mode by default
@@ -191,7 +157,6 @@ python app.py preview demo                        # reopen the last demo run
 Demo runs seed placeholder artifacts, redacted `actions.log` lines, and append to `history/history.jsonl`.
 
 ---
-
 ## Command Reference
 
 ### `python app.py apply ...`
@@ -218,8 +183,9 @@ Demo runs seed placeholder artifacts, redacted `actions.log` lines, and append t
 - `history path` – print the absolute `history/` directory.
 - `history summary` – surface recent decision aggregates with `--last`, `--limit`, and `--json` options.
 
-### Preview runner helper
-There is no dedicated CLI command yet for “load an existing run”. Use the Python snippet from [Step 5](#step-5--review-candidates-in-the-preview-ui) to bind the preview server to a stored run id.
+### `python app.py preview ...`
+- `preview demo` - start the preview FastAPI server with demo data (`--no-browser`, `--port` available).
+- `preview run <runId>` - launch the preview FastAPI server for an existing automation run (`--no-browser`, `--port` available).
 
 ---
 
@@ -265,7 +231,7 @@ Ensure you installed the `dev` extras (or FastAPI/HTTPX manually), then:
 pytest -q
 pytest apps/preview/tests/test_queue_endpoints.py
 pytest sites/lever/tests/test_lever_queue_restart.py
-pnpm --filter @app/ui test -- --runInBand
+pnpm run test -- --runInBand
 ```
 
 ---
@@ -287,3 +253,4 @@ docs/                          # Architecture, PRD, story docs
 The project follows a story-driven workflow. See `docs/prd/epic-1-foundation-review-ui.md` and the individual `docs/stories/*.md` files for acceptance criteria and implementation notes.
 
 License: TBD
+

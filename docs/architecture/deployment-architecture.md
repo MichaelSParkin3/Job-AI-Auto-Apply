@@ -3,7 +3,7 @@
 ## Deployment Strategy
 - Frontend Deployment:
   - Platform: Local static assets served by FastAPI
-  - Build Command: `pnpm --filter @app/ui build`
+  - Build Command: `pnpm run build` (proxies to apps/ui)
   - Output Directory: `apps/ui/dist`
   - CDN/Edge: N/A (local)
 
@@ -28,7 +28,9 @@ jobs:
       - run: pytest -q
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
-      - run: cd apps/ui && pnpm install && pnpm build && pnpm test
+      - run: pnpm install
+      - run: pnpm run build
+      - run: pnpm run test
 ```
 
 ## Environments
@@ -39,3 +41,4 @@ jobs:
 | Production | N/A | N/A | Distributed locally |
 
 ---
+
