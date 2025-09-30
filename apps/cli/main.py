@@ -71,6 +71,10 @@ from core.autofill.planner import (
 from sites.lever.form_executor import LeverFormExecutor, LeverFormPlanner
 from sites.lever.lever_google_discovery import LeverGoogleDiscovery, LeverSerpResult
 from sites.lever.navigation import LeverNavigator
+from sites.lever.resume_analysis import (
+    load_resume_analysis_settings,
+    wait_for_analysis,
+)
 from sites.lever.summary import LeverSummaryBuilder
 from sites.simplyhired.form_mapper import FormFillPlan, FormSelectorLibrary, FormStructureMapper
 from sites.simplyhired.form_filler import FormFillExecutor
@@ -1232,6 +1236,7 @@ def apply_run(
         run_dir=run_record.run_dir,
         step_lookup=resume_step_lookup,
     )
+    resume_analysis_settings = load_resume_analysis_settings(base=base)
 
     queue_manager = ReviewQueueManager(
         run_store=run_store,
@@ -1247,6 +1252,7 @@ def apply_run(
         form_plan_path = candidate_dir / "form-plan.json"
         form_summary_path = candidate_dir / "form-summary.json"
         resume_payload_path = candidate_dir / "resume-upload.json"
+        resume_analysis_path = candidate_dir / "resume-analysis.json"
         preview_dir = candidate_dir / "preview"
         preview_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = preview_dir / "pre-submit.png"
@@ -1423,6 +1429,44 @@ def apply_run(
             }
         )
 
+        resume_success: bool | None = None
+        if binding.resume_path.exists():
+            resume_result = resume_uploader.upload(
+                selector=plan_result.resume_selector, step_id="lever-form"
+            )
+            resume_payload = resume_result.to_payload()
+            resume_payload_path.write_text(
+                json.dumps(resume_payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            candidate_payload["resumeUpload"] = resume_payload
+            candidate_payload.setdefault("telemetry", {})[
+                "resumeUpload"
+            ] = resume_result.telemetry_payload()
+            resume_success = resume_result.status in {"uploaded", "simulated"}
+            run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
+
+            if resume_success and mode == "ai_autofill":
+                analysis_result = wait_for_analysis(
+                    controller,
+                    resume_analysis_settings,
+                    telemetry_callback=log_event,
+                )
+                resume_analysis_path.write_text(
+                    json.dumps(analysis_result.to_payload(), indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                candidate_payload["resumeAnalysis"] = analysis_result.to_payload()
+                candidate_payload.setdefault("telemetry", {})[
+                    "resumeAnalysis"
+                ] = analysis_result.telemetry_payload()
+                candidate_payload["artifacts"]["resumeAnalysis"] = str(
+                    resume_analysis_path
+                )
+                run_store.upsert_lever_candidate(
+                    run_record, candidate_id, candidate_payload
+                )
+
         if mode == "ai_autofill" and enriched_plan_result.intents:
             autofill_fields = [
                 LeverAutofillField(
@@ -1451,7 +1495,9 @@ def apply_run(
             )
             try:
                 execution_result = autofill_executor.execute(
-                    autofill_plan, answers=answers
+                    autofill_plan,
+                    answers=answers,
+                    validate_prefilled=True,
                 )
             except Exception as exc:  # pragma: no cover - defensive autopfill guard
                 log_event(
@@ -1505,23 +1551,6 @@ def apply_run(
         )
         candidate_payload["formSummary"] = form_summary
         run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
-
-        resume_success: bool | None = None
-        if binding.resume_path.exists():
-            resume_result = resume_uploader.upload(
-                selector=plan_result.resume_selector, step_id="lever-form"
-            )
-            resume_payload = resume_result.to_payload()
-            resume_payload_path.write_text(
-                json.dumps(resume_payload, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            candidate_payload["resumeUpload"] = resume_payload
-            candidate_payload.setdefault("telemetry", {})[
-                "resumeUpload"
-            ] = resume_result.telemetry_payload()
-            resume_success = resume_result.status in {"uploaded", "simulated"}
-            run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
 
         summary_payload = summary_builder.build(
             run_id=run_record.id,

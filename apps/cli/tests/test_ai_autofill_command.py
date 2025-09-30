@@ -194,6 +194,7 @@ except ModuleNotFoundError:  # pragma: no cover
     pydantic_module.validator = _validator
     sys.modules["pydantic"] = pydantic_module
 
+from apps.browser import BrowserActionResult, BrowserActionStatus  # noqa: E402
 from apps.cli.main import apply_run  # noqa: E402
 
 
@@ -209,7 +210,7 @@ class StubAutofillExecutor:
         self.last_answers = None
         StubAutofillExecutor.last_instance = self
 
-    def execute(self, plan, *, answers):
+    def execute(self, plan, *, answers, validate_prefilled=False):
         self.last_plan = plan
         self.last_answers = answers
 
@@ -359,6 +360,33 @@ class StubBrowserUseController:
     def __init__(self, config) -> None:
         self.config = config
         self.session_id = "stub-session"
+        self._html_counter = 0
+
+    def wait_for_idle(self, timeout: float = 5.0) -> BrowserActionResult:
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"response": {"timeout": timeout}},
+            telemetry={"event": "stub.idle"},
+        )
+
+    def get_page_html(self) -> BrowserActionResult:
+        self._html_counter += 1
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"html": f"<html data-counter=\"{self._html_counter}\"></html>"},
+            telemetry={"event": "stub.html"},
+        )
+
+    def query_selector(self, selector: str) -> BrowserActionResult:
+        exists = selector in {
+            "div.resume-upload-success",
+            "input#resume-upload-input.application-file-input[value]",
+        }
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"exists": exists, "response": {"exists": exists, "count": 1 if exists else 0}},
+            telemetry={"event": "stub.selector"},
+        )
 
 
 @pytest.fixture()
@@ -442,9 +470,26 @@ def stubbed_environment(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr("apps.cli.main.ProfileService", StubProfileService)
     monkeypatch.setattr("apps.cli.main.AutofillExecutor", StubAutofillExecutor)
-    selectors_dir = tmp_path / "sites" / "lever" / "selectors"
+    lever_site_dir = tmp_path / "sites" / "lever"
+    selectors_dir = lever_site_dir / "selectors"
     selectors_dir.mkdir(parents=True, exist_ok=True)
     (selectors_dir / "form-fields.json").write_text(json.dumps({"fields": []}), encoding="utf-8")
+    (lever_site_dir / "config.yaml").write_text(
+        """
+resume:
+  success_selectors:
+    - "div.resume-upload-success"
+    - "input#resume-upload-input.application-file-input[value]"
+  working_selectors:
+    - "div.resume-upload-spinner"
+  failure_selectors:
+    - "div.resume-upload-error"
+  max_wait_seconds: 2
+  poll_interval_ms: 100
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
     return tmp_path
 
 
@@ -484,3 +529,6 @@ def test_apply_run_ai_autofill_records_execution(stubbed_environment: Path, caps
     assert Path(execution.get("path", "")).exists()
     assert StubAutofillExecutor.last_instance is not None
     assert StubAutofillExecutor.last_instance.last_plan is not None
+    resume_analysis = candidate_payload.get("resumeAnalysis")
+    assert resume_analysis is not None
+    assert resume_analysis.get("status") in {"ok", "timeout", "failed"}

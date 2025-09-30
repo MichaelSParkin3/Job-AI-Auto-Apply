@@ -30,6 +30,7 @@ class StubController:
         self.screenshot_calls: list[tuple[str, Path]] = []
         self.fail_selectors: set[str] = set()
         self.screenshot_fail_selectors: set[str] = set()
+        self.field_states: dict[str, dict[str, Any]] = {}
 
     def focus(self, selector: str) -> BrowserActionResult:
         self.focus_calls.append(selector)
@@ -73,6 +74,14 @@ class StubController:
         self.checkbox_calls.append((selector, checked))
         return BrowserActionResult(
             status=BrowserActionStatus.OK, details={}, telemetry={}
+        )
+
+    def get_field_state(self, selector: str, widget_type: str) -> BrowserActionResult:
+        state = self.field_states.get(selector, {"value": "", "empty": True})
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"state": state},
+            telemetry={},
         )
 
     def upload_file(
@@ -329,4 +338,110 @@ def test_autofill_blocks_and_emits_guardrail_on_disallowed_domain(tmp_path: Path
     assert result.fields[0].reason == "blocked_domain"
     # Guardrail event must be present
     assert any(e.get("event") == "guardrail.browser.BLOCKED_DOMAIN" for e in guardrail_events)
+
+
+def test_executor_prefilled_field_skipped_after_validation(tmp_path: Path) -> None:
+    controller = StubController()
+    controller.field_states["input#name"] = {"value": "Existing Name", "empty": False}
+    events: list[dict[str, Any]] = []
+
+    def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    executor = AutofillExecutor(
+        controller=controller,
+        run_dir=tmp_path,
+        telemetry_callback=record,
+        dry_run=False,
+    )
+    field = LeverAutofillField(
+        key="fullName",
+        value_key="fullName",
+        label="Full name",
+        selector="input#name",
+        field_type="text",
+        strategy="profile_answer",
+    )
+    plan = _build_plan(field)
+    result = executor.execute(
+        plan,
+        answers={"fullName": "Profile Name"},
+        validate_prefilled=True,
+    )
+
+    assert controller.fill_calls == []
+    assert result.filled() == 0
+    assert result.skipped() == 1
+    skip = result.fields[0]
+    assert skip.reason == "prefilled"
+    assert skip.value_length == len("Existing Name")
+    assert any(event["event"] == "RESUME_FIELDS_VALIDATED" for event in events)
+
+
+def test_executor_validation_uses_profile_when_dom_invalid(tmp_path: Path) -> None:
+    controller = StubController()
+    controller.field_states["input#email"] = {"value": "broken", "empty": False}
+    events: list[dict[str, Any]] = []
+
+    def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    executor = AutofillExecutor(
+        controller=controller,
+        run_dir=tmp_path,
+        telemetry_callback=record,
+        dry_run=False,
+    )
+    field = LeverAutofillField(
+        key="email",
+        value_key="email",
+        label="Email",
+        selector="input#email",
+        field_type="email",
+        strategy="profile_answer",
+    )
+    plan = _build_plan(field)
+    result = executor.execute(
+        plan,
+        answers={"email": "user@example.com"},
+        validate_prefilled=True,
+    )
+
+    assert result.filled() == 1
+    assert controller.fill_calls == [("input#email", "user@example.com")]
+    validations = [e for e in events if e["event"] == "RESUME_FIELDS_VALIDATED"]
+    assert validations and any(f["status"] == "updated" for f in validations[-1]["fields"])
+
+
+def test_executor_validation_emits_failure_when_no_profile_value(tmp_path: Path) -> None:
+    controller = StubController()
+    controller.field_states["input#phone"] = {"value": "123", "empty": False}
+    events: list[dict[str, Any]] = []
+
+    def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    executor = AutofillExecutor(
+        controller=controller,
+        run_dir=tmp_path,
+        telemetry_callback=record,
+        dry_run=False,
+    )
+    field = LeverAutofillField(
+        key="phone",
+        value_key="phone",
+        label="Phone",
+        selector="input#phone",
+        field_type="tel",
+        strategy="profile_answer",
+    )
+    plan = _build_plan(field)
+    result = executor.execute(
+        plan,
+        answers={},
+        validate_prefilled=True,
+    )
+
+    assert result.skipped() == 1
+    assert any(event["event"] == "RESUME_FIELD_VALIDATION_FAILED" for event in events)
 

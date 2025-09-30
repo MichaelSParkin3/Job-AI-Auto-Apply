@@ -53,6 +53,9 @@
 - `sites/simplyhired.resume_uploader.ResumeUploader` orchestrates profile resume resolution, invokes the controller
   primitive, confirms DOM attachment via `get_field_state(..., widget_type="file")`, and retries once using guardrail
   jitter before capturing a focused HTML snapshot on failure.
+- `sites/lever.resume_analysis.wait_for_analysis` polls Lever-specific success selectors after upload, emitting
+  `RESUME_ANALYSIS_*` telemetry and falling back to DOM stability/network idle cues before handing control back to the
+  autofill executor.
 - Successful uploads persist a redacted summary to `run.json` (`resumeUpload`), append a history entry, and echo a concise
   CLI status line (attempts + simulated flag). Failures capture artifacts under `runs/<id>/resume/` and bubble structured
   diagnostics back to QA for investigation.
