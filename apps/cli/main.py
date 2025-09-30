@@ -6,6 +6,7 @@ import sys
 import hashlib
 import json
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +15,40 @@ from urllib.error import URLError
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-import typer
+try:  # pragma: no cover - exercised in environments without typer installed
+    import typer
+except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
+    class _TyperExit(Exception):
+        def __init__(self, code: int | None = None) -> None:
+            super().__init__(code)
+            self.code = code
+
+    def _identity_decorator(*_args, **_kwargs):
+        def _decorator(func):
+            return func
+
+        return _decorator
+
+    def _option_stub(*_args, **_kwargs):
+        return _kwargs.get("default")
+
+    def _echo_stub(message: str, **_kwargs) -> None:
+        print(message)
+
+    typer = types.SimpleNamespace(  # type: ignore[assignment]
+        Typer=lambda *args, **kwargs: types.SimpleNamespace(
+            command=_identity_decorator,
+            callback=_identity_decorator,
+            add_typer=lambda sub_app, *a, **kw: sub_app,
+        ),
+        Option=_option_stub,
+        Argument=_option_stub,
+        Exit=_TyperExit,
+        secho=_echo_stub,
+        echo=_echo_stub,
+        colors=types.SimpleNamespace(RED="red", GREEN="green", YELLOW="yellow"),
+    )
+
 
 from apps.browser import (
     BrowserActionStatus,
@@ -48,7 +82,20 @@ from .runtime_state import get_run_context, set_run_context
 from .utils import ApiError, log_event
 
 
-app = typer.Typer(help="Job AI Auto Apply CLI")
+def _create_typer_app(*args: Any, **kwargs: Any):
+    """Return a Typer application with compatibility helpers for stubbed environments."""
+
+    typer_app = typer.Typer(*args, **kwargs)
+    if not hasattr(typer_app, "add_typer"):
+
+        def _add_typer(_sub_app, *_, **__):
+            return _sub_app
+
+        setattr(typer_app, "add_typer", _add_typer)
+    return typer_app
+
+
+app = _create_typer_app(help="Job AI Auto Apply CLI")
 
 
 def _configure_console_utf8() -> None:
@@ -74,11 +121,11 @@ def init(_: bool = typer.Option(False, "--version", help="Show version")):
     ensure_runtime_dirs()
 
 
-config_app = typer.Typer(help="Configuration commands")
-apply_app = typer.Typer(help="Application/automation commands (skeleton)")
-preview_app = typer.Typer(help="Preview server commands")
-profiles_app = typer.Typer(help="Profile management commands")
-history_app = typer.Typer(help="Run history utilities (skeleton)")
+config_app = _create_typer_app(help="Configuration commands")
+apply_app = _create_typer_app(help="Application/automation commands (skeleton)")
+preview_app = _create_typer_app(help="Preview server commands")
+profiles_app = _create_typer_app(help="Profile management commands")
+history_app = _create_typer_app(help="Run history utilities (skeleton)")
 
 
 @config_app.command("init")

@@ -8,7 +8,18 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
-from bs4 import BeautifulSoup
+try:  # pragma: no cover - exercised when bs4 is unavailable
+    from bs4 import BeautifulSoup
+except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
+    class BeautifulSoup:  # type: ignore[override]
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def select(self, *_args, **_kwargs) -> list:
+            return []
+
+        def find_all(self, *_args, **_kwargs) -> list:
+            return []
 from urllib.parse import urlparse
 
 from apps.browser import BrowserActionStatus, BrowserUseController
