@@ -20,6 +20,7 @@ class RunContext:
     logs_path: Path
     profile_id: Optional[str]
     profile_binding: Optional[Dict[str, Any]] = None
+    mode: Optional[str] = None
 
 
 _run_context: contextvars.ContextVar[Optional[RunContext]] = contextvars.ContextVar(

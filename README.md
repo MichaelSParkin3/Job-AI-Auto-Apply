@@ -215,6 +215,7 @@ Demo runs seed placeholder artifacts, redacted `actions.log` lines, and append t
 
 ### `python app.py history ...`
 - `history path` – print the absolute `history/` directory.
+- `history summary` – surface recent decision aggregates with `--last`, `--limit`, and `--json` options.
 
 ### Preview runner helper
 There is no dedicated CLI command yet for “load an existing run”. Use the Python snippet from [Step 5](#step-5--review-candidates-in-the-preview-ui) to bind the preview server to a stored run id.

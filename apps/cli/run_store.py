@@ -18,6 +18,7 @@ from apps.preview.constants import (
 )
 
 from .config_loader import ensure_runtime_dirs, get_base_dir
+from .redaction import prepare_rationale_audit_fields
 from .runtime_state import RunContext, set_run_context
 
 
@@ -61,6 +62,7 @@ class RunRecord:
             "id": self.id,
             "startedAt": self.started_at.isoformat().replace("+00:00", "Z"),
             "profileId": self.profile_id,
+            "mode": "review",
             "status": "review",
             "posting": {
                 "postingUrl": "demo://placeholder",
@@ -88,6 +90,8 @@ class RunRecord:
                 "mode": "demo",
                 "profileLabel": format_profile_label(self.profile_id),
             },
+            "decisions": [],
+            "queue": _empty_queue_snapshot("review"),
         }
 
 
@@ -141,6 +145,7 @@ class RunStore:
                 logs_path=record.logs_path,
                 profile_id=record.profile_id,
                 profile_binding=profile_binding,
+                mode="review",
             )
         )
         return record
@@ -180,6 +185,7 @@ class RunStore:
         run_payload = {
             "id": record.id,
             "startedAt": record.started_at.isoformat().replace("+00:00", "Z"),
+            "mode": "review",
             "status": "search_ready_pending",
             "profileId": profile_id,
             "automation": {
@@ -195,6 +201,8 @@ class RunStore:
             "artifactsDir": str(run_dir),
             "logsPath": str(logs_path),
             "metadata": metadata,
+            "decisions": [],
+            "queue": _empty_queue_snapshot("review"),
         }
         record.run_json_path.write_text(
             json.dumps(run_payload, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -208,6 +216,7 @@ class RunStore:
                 logs_path=record.logs_path,
                 profile_id=record.profile_id,
                 profile_binding=profile_binding,
+                mode="review",
             )
         )
         return record
@@ -289,6 +298,7 @@ class RunStore:
                 logs_path=record.logs_path,
                 profile_id=record.profile_id,
                 profile_binding=profile_binding,
+                mode=mode,
             )
         )
         return record
@@ -376,6 +386,7 @@ class RunStore:
                 logs_path=record.logs_path,
                 profile_id=record.profile_id,
                 profile_binding=profile_binding,
+                mode="plan",
             )
         )
         return record
@@ -620,6 +631,33 @@ class RunStore:
         payload = self._load_run_json(record.run_json_path)
         decisions = payload.setdefault("decisions", [])
         decision_payload = json.loads(json.dumps(decision, ensure_ascii=False))
+        raw_rationale = decision_payload.pop("rationale", None)
+        audit_source: Optional[str] = raw_rationale
+        if audit_source is None:
+            preview = decision_payload.get("rationalePreview")
+            audit_source = str(preview) if preview else None
+        audit = prepare_rationale_audit_fields(audit_source)
+        if raw_rationale is not None and audit["rationaleHash"]:
+            decision_payload["rationaleHash"] = audit["rationaleHash"]
+        decision_payload.setdefault("rationaleRedacted", audit["rationaleRedacted"])
+        decision_payload.setdefault("rationaleTruncated", audit["rationaleTruncated"])
+        decision_payload.setdefault("rationaleLength", audit["rationaleLength"])
+        if audit["rationalePreview"]:
+            decision_payload.setdefault("rationalePreview", audit["rationalePreview"])
+        else:
+            decision_payload.pop("rationalePreview", None)
+        decision_id = decision_payload.get("decisionId")
+        if decision_id:
+            decisions_dir = record.run_dir / "decisions"
+            decisions_dir.mkdir(parents=True, exist_ok=True)
+            decision_artifact = decisions_dir / f"{decision_id}.json"
+            decision_artifact.write_text(
+                json.dumps(decision_payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            decision_payload["artifactPath"] = decision_artifact.relative_to(
+                record.run_dir
+            ).as_posix()
         for index, existing in enumerate(decisions):
             if existing.get("decisionId") == decision_payload.get("decisionId"):
                 decisions[index] = decision_payload

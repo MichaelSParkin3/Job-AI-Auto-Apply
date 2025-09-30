@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import types
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 try:  # pragma: no cover - exercised when portalocker is unavailable
     import portalocker
@@ -33,7 +34,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
     )
 
 from .config_loader import ensure_runtime_dirs, get_base_dir
-from .redaction import redact_event
+from .redaction import prepare_rationale_audit_fields, redact_event
 from .runtime_state import RunContext
 from .utils import log_event
 
@@ -56,6 +57,47 @@ class HistoryWriter:
         redacted = redact_event(payload)
         self._append_jsonl(redacted)
         return self.history_path
+
+    def append_decision_summary(
+        self,
+        context: RunContext,
+        *,
+        run_payload: Mapping[str, object],
+        queue_payload: Mapping[str, object],
+        decision_payload: Mapping[str, object],
+    ) -> Path:
+        """Append an audit entry summarising a queue decision."""
+
+        posting = run_payload.get("posting") or {}
+        posting_url = str(posting.get("postingUrl") or "")
+        profile_id = (
+            str(run_payload.get("profileId"))
+            if run_payload.get("profileId")
+            else (context.profile_id or "")
+        )
+        decision_ref = _compact_decision_reference(decision_payload)
+        decisions_list = run_payload.get("decisions") or []
+        summary = _summarise_decisions(decisions_list)
+        queue_depth = _queue_depth_metrics(queue_payload)
+        entry = {
+            "id": run_payload.get("id") or context.id,
+            "timestamp": decision_payload.get("timestamp")
+            or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "profileId": profile_id,
+            "postingUrl": posting_url,
+            "jobTitle": posting.get("title"),
+            "company": posting.get("company"),
+            "location": posting.get("location"),
+            "fingerprint": f"{context.id}:decision:{decision_ref.get('id') or 'unknown'}",
+            "mode": _resolve_mode(run_payload),
+            "status": _status_from_outcome(decision_payload.get("outcome")),
+            "runPath": str(context.run_dir),
+            "queuePath": str(context.run_dir / "queue.json"),
+            "decisions": summary,
+            "queueDepth": queue_depth,
+            "decision": decision_ref,
+        }
+        return self.append_entry(entry)
 
     def append_demo_entry(
         self,
@@ -225,11 +267,121 @@ class HistoryWriter:
 
     def _append_jsonl(self, payload: dict[str, object]) -> None:
         serialized = json.dumps(payload, ensure_ascii=False)
-        self.history_path.parent.mkdir(parents=True, exist_ok=True)
-        with portalocker.Lock(
-            self.history_path, "a", flags=portalocker.LockFlags.EXCLUSIVE
-        ) as handle:
-            handle.write(serialized + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        history_dir = self.history_path.parent
+        history_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self.history_path.with_suffix(self.history_path.suffix + ".lock")
+        temp_path = history_dir / f"{self.history_path.name}.tmp"
+        with portalocker.Lock(lock_path, "a", flags=portalocker.LockFlags.EXCLUSIVE):
+            try:
+                with open(temp_path, "w", encoding="utf-8") as tmp:
+                    if self.history_path.exists():
+                        with open(self.history_path, "r", encoding="utf-8") as current:
+                            shutil.copyfileobj(current, tmp)
+                    tmp.write(serialized + "\n")
+                    tmp.flush()
+                    os.fsync(tmp.fileno())
+                os.replace(temp_path, self.history_path)
+            except Exception:
+                try:
+                    temp_path.unlink()
+                except FileNotFoundError:
+                    pass
+                raise
+
+
+def _compact_decision_reference(decision: Mapping[str, object]) -> dict[str, object]:
+    """Return a redacted decision reference suitable for history logging."""
+
+    audit = prepare_rationale_audit_fields(
+        decision.get("rationalePreview") or decision.get("rationale") or None
+    )
+    payload = {
+        "id": decision.get("decisionId"),
+        "candidateId": decision.get("candidateId"),
+        "outcome": decision.get("outcome"),
+        "mode": decision.get("mode"),
+        "confidence": decision.get("confidence"),
+        "timestamp": decision.get("timestamp"),
+        "artifactPath": decision.get("artifactPath"),
+        "rationaleHash": decision.get("rationaleHash") or audit["rationaleHash"],
+        "rationaleRedacted": decision.get("rationaleRedacted", audit["rationaleRedacted"]),
+        "rationaleTruncated": decision.get(
+            "rationaleTruncated", audit["rationaleTruncated"]
+        ),
+        "rationaleLength": decision.get("rationaleLength", audit["rationaleLength"]),
+    }
+    preview = decision.get("rationalePreview") or audit["rationalePreview"]
+    if preview:
+        payload["rationalePreview"] = preview
+    return {key: value for key, value in payload.items() if value not in (None, "")}
+
+
+def _summarise_decisions(decisions: Sequence[object]) -> dict[str, object]:
+    """Aggregate decision outcomes for history analytics."""
+
+    totals: dict[str, int] = {}
+    latest: dict[str, str] = {}
+    by_mode: dict[str, int] = {}
+    last_timestamp: str | None = None
+    for item in decisions:
+        if not isinstance(item, Mapping):
+            continue
+        outcome = str(item.get("outcome")) if item.get("outcome") else "unknown"
+        totals[outcome] = totals.get(outcome, 0) + 1
+        timestamp = item.get("timestamp")
+        if isinstance(timestamp, str):
+            current_latest = latest.get(outcome)
+            if current_latest is None or timestamp > current_latest:
+                latest[outcome] = timestamp
+            if last_timestamp is None or timestamp > last_timestamp:
+                last_timestamp = timestamp
+        mode = item.get("mode")
+        if isinstance(mode, str):
+            by_mode[mode] = by_mode.get(mode, 0) + 1
+    return {
+        "total": sum(totals.values()),
+        "byOutcome": totals,
+        "latest": latest,
+        "byMode": by_mode,
+        "lastDecisionAt": last_timestamp,
+    }
+
+
+def _queue_depth_metrics(queue_payload: Mapping[str, object]) -> dict[str, object]:
+    """Return queue depth counters from a queue snapshot payload."""
+
+    pending = queue_payload.get("pending") or []
+    decided = queue_payload.get("decided") or []
+    escalated = queue_payload.get("escalated") or []
+    last_updated = queue_payload.get("lastUpdated")
+    return {
+        "pending": len(pending) if isinstance(pending, Sequence) else 0,
+        "decided": len(decided) if isinstance(decided, Sequence) else 0,
+        "escalated": len(escalated) if isinstance(escalated, Sequence) else 0,
+        "lastUpdated": last_updated,
+    }
+
+
+def _resolve_mode(run_payload: Mapping[str, object]) -> str:
+    """Derive the run mode from run.json payload fallbacks."""
+
+    mode = run_payload.get("mode")
+    if isinstance(mode, str) and mode:
+        return mode
+    metadata = run_payload.get("metadata")
+    if isinstance(metadata, Mapping):
+        meta_mode = metadata.get("mode")
+        if isinstance(meta_mode, str) and meta_mode:
+            return meta_mode
+    return "review"
+
+
+def _status_from_outcome(outcome: object) -> str:
+    """Map decision outcomes to existing HistoryEntry status enums."""
+
+    if outcome == "approve":
+        return "submitted"
+    if outcome == "abort":
+        return "aborted"
+    return "auto_review_pending"
 

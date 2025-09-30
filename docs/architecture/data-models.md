@@ -54,8 +54,8 @@ export interface JobPosting {
 - `profileId`: string — link to Profile
 - `mode`: `review|auto_review|auto_submit`
 - `status`: `pending|review|auto_pending|submitting|success|error|aborted`
-- `decisions[]`: ordered list of decision payloads (see below)
-- `queue`: snapshot of outstanding candidates with state machine metadata
+- `decisions[]`: ordered list of decision payloads with hashed rationales (see below)
+- `queue`: snapshot of outstanding candidates with state machine metadata and queue depth counters
 
 ### TypeScript Interface
 ```ts
@@ -96,8 +96,13 @@ export interface RunRecord {
 - `outcome`: `approve|abort|edit_request|needs_review`
 - `confidence`: number 0-1
 - `mode`: `human|ai`
-- `rationale`: string — sanitized explanation for audit trail
+- `rationaleHash`: deterministic SHA-256 hash for correlating rationale text stored elsewhere
+- `rationalePreview?`: sanitized and truncated summary of the rationale (no raw PII)
+- `rationaleRedacted`: boolean flag indicating whether redaction modified the preview
+- `rationaleTruncated`: boolean flag indicating whether preview was shortened for length
+- `rationaleLength`: number — original character count prior to redaction
 - `requestedChanges?`: array of structured edits (field/value pairs)
+- `artifactPath?`: relative path to the persisted decision artifact under the run directory
 - `timestamp`: ISO string
 
 ```ts
@@ -107,8 +112,13 @@ export interface SubmissionDecision {
   outcome: "approve" | "abort" | "edit_request" | "needs_review";
   confidence: number;
   mode: "human" | "ai";
-  rationale: string;
+  rationaleHash: string;
+  rationalePreview?: string;
+  rationaleRedacted: boolean;
+  rationaleTruncated: boolean;
+  rationaleLength: number;
   requestedChanges?: Array<{ field: string; value: string; reason?: string }>;
+  artifactPath?: string;
   timestamp: string;
 }
 ```
@@ -118,6 +128,7 @@ export interface SubmissionDecision {
 
 ```ts
 export interface ReviewQueueSnapshot {
+  mode: "review" | "auto_review" | "auto_submit";
   pending: ApplicationCandidateSummary[];
   decided: SubmissionDecision[];
   escalated: ApplicationCandidateSummary[]; // waiting for human review after AI fallback
