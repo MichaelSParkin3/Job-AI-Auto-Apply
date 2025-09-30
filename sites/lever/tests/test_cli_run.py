@@ -202,6 +202,18 @@ def test_apply_run_populates_queue_and_artifacts(lever_cli_run):
     assert candidate_payload["resumeUpload"]["status"] == "simulated"
     screenshot_path = candidate_payload["artifacts"]["previewScreenshot"]
     assert Path(screenshot_path).exists()
+    autofill_plan_meta = candidate_payload["autofillPlan"]
+    assert autofill_plan_meta["llmUsed"] is False
+    assert autofill_plan_meta["intents"] > 0
+    assert isinstance(candidate_payload["telemetry"]["autofillPlan"], dict)
+    plan_artifact = Path(autofill_plan_meta["path"])
+    assert plan_artifact.exists()
+    plan_hash_path = Path(autofill_plan_meta["hashPath"])
+    assert plan_hash_path.exists()
+    plan_payload = json.loads(plan_artifact.read_text(encoding="utf-8"))
+    assert plan_payload["fields"], "autofill plan should include field intents"
+    assert plan_payload["llmUsed"] is False
+    assert (run_dir / "autofill" / "prompts").exists()
 
     guardrails = StubBrowserController.last_config.guardrail_domains
     assert tuple(guardrails) == tuple(_lever_guardrail_domains())

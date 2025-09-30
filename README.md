@@ -130,6 +130,7 @@ python app.py apply run --plan lever-plan.json --limit 5 --profile frontend-dev 
 What happens:
 - A run directory `runs/<runId>/` is created.
 - Each candidate gets a subfolder with HTML snapshots, form plan, summary, resume telemetry, and screenshot.
+- Enriched plan intents live under `runs/<runId>/plans/<candidateId>.json` with hashed prompt bundles in `runs/<runId>/autofill/prompts/` for audit without leaking PII.
 - `queue.json` tracks candidate state (`discovered → planned → awaiting_decision`).
 - Console output logs queue transitions and summary counts.
 
@@ -164,7 +165,7 @@ Demo runs seed placeholder artifacts, redacted `actions.log` lines, and append t
 | --- | --- | --- |
 | `apply demo` | Provision a demo run, launch preview UI | `--limit`, `--no-browser` available |
 | `apply plan` | Emit Lever discovery plan JSON | `--browser-discovery`, `--programmable-search`, `--terms`, `--location`, `--pages`, CSE overrides |
-| `apply run` | Execute Lever automation using a plan | `--plan`, `--profile`, `--limit`, `--mode review`, `--dry-run` |
+| `apply run` | Execute Lever automation using a plan | `--plan`, `--profile`, `--limit`, `--mode review`, `--dry-run`, `--plan-model`, `--plan-llm/--no-plan-llm` |
 | `apply queue` | Manually reassign queue candidates between human/AI lanes | `--action escalate|assign-ai`, `--reason` (optional context) |
 | `apply open` | Launch Browser-Use session for a SimplyHired search | Accepts `--profile`, `--model`, `--session-backups/--no-session-backups` |
 

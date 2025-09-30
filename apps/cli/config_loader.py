@@ -46,6 +46,8 @@ DEFAULTS = {
         "programmable_search": False,
         "google_cse_key": None,
         "google_cse_cx": None,
+        "model": "deepseek/deepseek-chat-v3.1:free",
+        "llm_enabled": True,
     },
 }
 
@@ -162,6 +164,8 @@ def load_env(base: Path | None = None) -> Dict[str, Any]:
         "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY"),
         "OPENROUTER_MODEL": os.environ.get("OPENROUTER_MODEL"),
     }
+    if env_config.get("OPENROUTER_MODEL"):
+        env_config["plan.model"] = env_config["OPENROUTER_MODEL"]
     if google_cse_key := os.environ.get("GOOGLE_CSE_KEY"):
         env_config["plan.google_cse_key"] = google_cse_key
     if google_cse_cx := os.environ.get("GOOGLE_CSE_CX"):
@@ -260,6 +264,8 @@ class Settings:
     plan_programmable_search: bool = False
     plan_google_cse_key: str | None = None
     plan_google_cse_cx: str | None = None
+    plan_model: str | None = DEFAULTS["plan"]["model"]
+    plan_llm_enabled: bool = DEFAULTS["plan"]["llm_enabled"]
     # Derived/env
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
@@ -319,6 +325,10 @@ class Settings:
                 target["plan_google_cse_key"] = str(value)
             elif key == "google_cse_cx":
                 target["plan_google_cse_cx"] = str(value)
+            elif key == "model":
+                target["plan_model"] = str(value)
+            elif key in {"llm_enabled", "llm"}:
+                target["plan_llm_enabled"] = _to_bool(value)
 
         if isinstance(plan_dict, dict):
             for key, value in plan_dict.items():
@@ -334,6 +344,10 @@ class Settings:
             _assign_plan_option(data, "google_cse_key", data.pop("plan_google_cse_key"))
         if "plan_google_cse_cx" in data:
             _assign_plan_option(data, "google_cse_cx", data.pop("plan_google_cse_cx"))
+        if "plan_model" in data and data["plan_model"] is not None:
+            data["plan_model"] = str(data["plan_model"])
+        if "plan_llm_enabled" in data and data["plan_llm_enabled"] is not None:
+            data["plan_llm_enabled"] = _to_bool(data["plan_llm_enabled"])
         # Allow nested browser config in YAML/env overrides (browser.* keys)
         browser_dict = data.pop("browser", {}) or {}
         if isinstance(browser_dict, dict):
@@ -448,14 +462,7 @@ class Settings:
                         processed["browser_session_backups_retention"] = int(value)
                 elif key.startswith("plan."):
                     _, subkey = key.split(".", 1)
-                    if subkey == "browser_discovery":
-                        processed["plan_browser_discovery"] = _to_bool(value)
-                    elif subkey == "programmable_search":
-                        processed["plan_programmable_search"] = _to_bool(value)
-                    elif subkey == "google_cse_key":
-                        processed["plan_google_cse_key"] = value
-                    elif subkey == "google_cse_cx":
-                        processed["plan_google_cse_cx"] = value
+                    _assign_plan_option(processed, subkey, value)
                 else:
                     processed[key] = value
             data.update(processed)

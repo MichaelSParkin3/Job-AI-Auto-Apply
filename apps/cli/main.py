@@ -62,6 +62,11 @@ from apps.browser import (
     SessionBackupManager,
 )
 from apps.preview.runner import run_preview_service
+from core.autofill.planner import (
+    AutofillPlannerConfig,
+    AutofillPlannerOrchestrator,
+    OpenRouterPlannerClient,
+)
 from sites.lever.form_executor import LeverFormExecutor, LeverFormPlanner
 from sites.lever.lever_google_discovery import LeverGoogleDiscovery, LeverSerpResult
 from sites.lever.navigation import LeverNavigator
@@ -792,6 +797,15 @@ def apply_plan(
         if profile_plan_overrides.get("google_cse_cx"):
             plan_preferences["google_cse_cx"] = profile_plan_overrides["google_cse_cx"]
 
+    planner_model = settings.plan_model or settings.OPENROUTER_MODEL or settings.browser_model
+    if planner_model is None:
+        planner_model = settings.browser_model
+    plan_llm_enabled_value = bool(settings.plan_llm_enabled)
+    if plan_model is None and profile_plan_overrides.get("model"):
+        planner_model = str(profile_plan_overrides["model"])
+    if plan_llm is None and profile_plan_overrides.get("llm_enabled") is not None:
+        plan_llm_enabled_value = bool(profile_plan_overrides["llm_enabled"])
+
     use_cse = (
         plan_preferences["programmable_search"]
         and bool(plan_preferences["google_cse_key"])
@@ -943,6 +957,16 @@ def apply_run(
     dry_run: bool = typer.Option(True, "--dry-run/--live", help="Force dry-run review mode."),
     mode: str = typer.Option("review", "--mode", help="Run mode (review only)."),
     model: Optional[str] = typer.Option(None, "--model", help="Override Browser-Use model for this run."),
+    plan_model: Optional[str] = typer.Option(
+        None,
+        "--plan-model",
+        help="Override the LLM model used for Lever form plan refinement.",
+    ),
+    plan_llm: Optional[bool] = typer.Option(
+        None,
+        "--plan-llm/--no-plan-llm",
+        help="Enable or disable LLM enrichment for Lever form planning.",
+    ),
 ) -> str | None:
     """Execute Lever apply automation end-to-end and populate the review queue."""
 
@@ -965,6 +989,10 @@ def apply_run(
         overrides["active_profile"] = profile
     if model:
         overrides["browser.model"] = model
+    if plan_model:
+        overrides["plan.model"] = plan_model
+    if plan_llm is not None:
+        overrides["plan.llm_enabled"] = plan_llm
 
     settings = Settings.load(overrides=overrides)
     base = get_base_dir()
@@ -1086,6 +1114,40 @@ def apply_run(
         typer.secho(f"Failed to load Lever form selectors: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
+    openrouter_key = settings.OPENROUTER_API_KEY or ""
+    enable_llm = bool(plan_llm_enabled_value and openrouter_key)
+    if plan_llm_enabled_value and not openrouter_key:
+        log_event(
+            {
+                "level": "info",
+                "event": "lever.plan.llm_disabled",
+                "message": "OpenRouter key missing; Lever planner will use deterministic selectors.",
+            }
+        )
+    llm_client = None
+    if enable_llm:
+        try:
+            llm_client = OpenRouterPlannerClient(
+                api_key=openrouter_key,
+                model=str(planner_model),
+            )
+        except Exception as exc:  # pragma: no cover - network/requests guard
+            log_event(
+                {
+                    "level": "warning",
+                    "event": "lever.plan.llm_client_error",
+                    "message": "Failed to initialize planner LLM client; falling back to deterministic selectors.",
+                    "error": str(exc),
+                }
+            )
+            enable_llm = False
+            llm_client = None
+    planner_config = AutofillPlannerConfig(model=str(planner_model), enable_llm=enable_llm)
+    planner_orchestrator = AutofillPlannerOrchestrator(
+        config=planner_config,
+        llm_client=llm_client,
+    )
+
     run_store = RunStore(base=base)
     run_record = run_store.start_lever_run(
         profile_id=profile_id,
@@ -1098,6 +1160,11 @@ def apply_run(
 
     lever_dir = run_record.run_dir / "lever"
     lever_dir.mkdir(parents=True, exist_ok=True)
+    plans_dir = run_record.run_dir / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    autofill_dir = run_record.run_dir / "autofill"
+    prompts_dir = autofill_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
     plan_output_path = lever_dir / "plan.json"
     plan_output_path.write_text(
         json.dumps(plan_payload, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -1196,11 +1263,116 @@ def apply_run(
         candidate_payload["formPlan"] = {"path": str(form_plan_path), "fields": len(plan_result.fields)}
         run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
 
-        answers: dict[str, Any] = {}
+        answer_metadata: Dict[str, Dict[str, Any]] = {}
+        answers: Dict[str, Any] = {}
         for field in plan_result.fields:
             resolved = resolver.resolve(profile_field=field.value_key, label=field.label)
+            answer_metadata[field.value_key] = {
+                "status": resolved.status,
+                "source": resolved.source,
+            }
             if resolved.value not in (None, ""):
                 answers[field.value_key] = resolved.value
+
+        enriched_plan_result = planner_orchestrator.build_plan(
+            candidate_id=candidate_id,
+            dom_html=navigation.html or "",
+            plan=plan_result,
+            answer_metadata=answer_metadata,
+        )
+        enriched_payload = {
+            "candidateId": candidate_id,
+            "model": planner_config.model,
+            "llmUsed": enriched_plan_result.llm_used,
+            "generatedAt": _iso_now(),
+            "fields": [
+                {
+                    "key": intent.value_key,
+                    "label": intent.label,
+                    "selector": intent.selector,
+                    "fieldType": intent.field_type,
+                    "strategy": intent.strategy,
+                    "confidence": intent.confidence,
+                    "fallbackSelector": intent.fallback_selector,
+                    "metadata": intent.metadata,
+                }
+                for intent in enriched_plan_result.intents
+            ],
+            "telemetry": {
+                "tokenUsage": enriched_plan_result.telemetry.token_usage,
+                "latencyMs": enriched_plan_result.telemetry.latency_ms,
+                "confidence": {
+                    "average": enriched_plan_result.telemetry.average_confidence,
+                    "min": enriched_plan_result.telemetry.min_confidence,
+                    "max": enriched_plan_result.telemetry.max_confidence,
+                },
+            },
+            "answers": answer_metadata,
+        }
+        plan_artifact_path = plans_dir / f"{candidate_id}.json"
+        plan_payload_text = json.dumps(enriched_payload, indent=2, ensure_ascii=False)
+        plan_artifact_path.write_text(plan_payload_text, encoding="utf-8")
+        plan_hash = hashlib.sha256(plan_payload_text.encode("utf-8")).hexdigest()
+        plan_hash_path = plans_dir / f"{candidate_id}.sha256"
+        plan_hash_path.write_text(plan_hash + "\n", encoding="utf-8")
+
+        prompt_artifacts: list[str] = []
+        prompt_artifacts_rel: list[str] = []
+        for record in enriched_plan_result.prompt_records:
+            digest_input = "|".join(
+                [candidate_id, planner_config.model, record.prompt, record.response]
+            )
+            digest = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+            prompt_path = prompts_dir / f"{candidate_id}-{digest[:12]}.json"
+            prompt_payload = {
+                "candidateId": candidate_id,
+                "model": planner_config.model,
+                "prompt": record.prompt,
+                "response": record.response,
+                "metadata": record.metadata,
+            }
+            prompt_path.write_text(
+                json.dumps(prompt_payload, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            prompt_artifacts.append(str(prompt_path))
+            prompt_artifacts_rel.append(prompt_path.relative_to(run_record.run_dir).as_posix())
+
+        candidate_payload["artifacts"]["autofillPlan"] = str(plan_artifact_path)
+        if prompt_artifacts:
+            candidate_payload["artifacts"]["autofillPrompts"] = prompt_artifacts
+        candidate_payload["autofillPlan"] = {
+            "path": str(plan_artifact_path),
+            "hashPath": str(plan_hash_path),
+            "model": planner_config.model,
+            "llmUsed": enriched_plan_result.llm_used,
+            "intents": len(enriched_plan_result.intents),
+            "confidence": enriched_plan_result.telemetry.average_confidence,
+            "promptArtifacts": prompt_artifacts_rel,
+            "answers": answer_metadata,
+        }
+        candidate_payload.setdefault("telemetry", {})["autofillPlan"] = {
+            "tokenUsage": enriched_plan_result.telemetry.token_usage,
+            "latencyMs": enriched_plan_result.telemetry.latency_ms,
+            "confidence": {
+                "average": enriched_plan_result.telemetry.average_confidence,
+                "min": enriched_plan_result.telemetry.min_confidence,
+                "max": enriched_plan_result.telemetry.max_confidence,
+            },
+        }
+        run_store.upsert_lever_candidate(run_record, candidate_id, candidate_payload)
+        log_event(
+            {
+                "event": "AUTOFILL_PLAN_READY",
+                "candidateId": candidate_id,
+                "model": planner_config.model,
+                "llmUsed": enriched_plan_result.llm_used,
+                "intents": len(enriched_plan_result.intents),
+                "tokenUsage": enriched_plan_result.telemetry.token_usage,
+                "latencyMs": enriched_plan_result.telemetry.latency_ms,
+                "confidence": enriched_plan_result.telemetry.average_confidence,
+            }
+        )
+
         form_summary = executor.execute(plan_result, profile_answers=answers)
         form_summary_path.write_text(
             json.dumps(form_summary, indent=2, ensure_ascii=False), encoding="utf-8"

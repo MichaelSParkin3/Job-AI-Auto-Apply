@@ -178,4 +178,57 @@ export interface ApplicationCandidateSummary {
 }
 ```
 
+## LeverAutofillPlan
+**Purpose:** Persist normalized fill intents per Lever candidate, combining deterministic selectors with optional LLM enrichment.
+
+**Key Attributes:**
+- `candidateId`: string — queue identifier
+- `model`: string — plan refinement model resolved via CLI → profile → global precedence
+- `llmUsed`: boolean — indicates if LLM output shaped the intents
+- `generatedAt`: ISO timestamp
+- `fields`: array of `{ key, label, selector, fieldType, strategy, confidence, fallbackSelector, metadata }`
+- `telemetry`: `{ tokenUsage: { prompt, completion, total }, latencyMs, confidence: { average, min, max } }`
+- `answers`: map keyed by valueKey summarising precedence (`status`, `source`)
+- `promptArtifacts`: hashed prompt bundles stored under `runs/<id>/autofill/prompts/`
+
+```json
+{
+  "candidateId": "lever-123",
+  "model": "deepseek/deepseek-chat-v3.1:free",
+  "llmUsed": false,
+  "generatedAt": "2025-12-18T03:41:02Z",
+  "fields": [
+    {
+      "key": "fullName",
+      "label": "Full name",
+      "selector": "input[data-qa='name-input']",
+      "fieldType": "text",
+      "strategy": "profile_answer",
+      "confidence": 0.9,
+      "fallbackSelector": "input[data-qa='name-input']",
+      "metadata": { "answerSource": "identity.full_name" }
+    },
+    {
+      "key": "securityAnswer",
+      "label": "Security question",
+      "selector": "textarea[data-qa='security-answer']",
+      "fieldType": "textarea",
+      "strategy": "deterministic_selector",
+      "confidence": 0.55,
+      "fallbackSelector": "textarea[data-qa='security-answer']",
+      "metadata": {}
+    }
+  ],
+  "telemetry": {
+    "tokenUsage": { "prompt": 0, "completion": 0, "total": 0 },
+    "latencyMs": 0,
+    "confidence": { "average": 0.725, "min": 0.55, "max": 0.9 }
+  },
+  "answers": {
+    "fullName": { "status": "resolved", "source": "identity.full_name" },
+    "securityAnswer": { "status": "missing", "source": "qa_override" }
+  }
+}
+```
+
 ---
