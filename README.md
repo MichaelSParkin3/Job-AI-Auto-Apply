@@ -200,6 +200,7 @@ Demo runs seed placeholder artifacts, redacted `actions.log` lines, and append t
 | `apply demo` | Provision a demo run, launch preview UI | `--limit`, `--no-browser` available |
 | `apply plan` | Emit Lever discovery plan JSON | `--browser-discovery`, `--programmable-search`, `--terms`, `--location`, `--pages`, CSE overrides |
 | `apply run` | Execute Lever automation using a plan | `--plan`, `--profile`, `--limit`, `--mode review`, `--dry-run` |
+| `apply queue` | Manually reassign queue candidates between human/AI lanes | `--action escalate|assign-ai`, `--reason` (optional context) |
 | `apply open` | Launch Browser-Use session for a SimplyHired search | Accepts `--profile`, `--model`, `--session-backups/--no-session-backups` |
 
 ### `python app.py profiles ...`
@@ -250,6 +251,7 @@ Key logging behaviors:
 ---
 
 ## Release Highlights
+- **4.5** – Queue override API + CLI power command, failsafe watchdog reassignment, preview UI take-back banner, and regression coverage.
 - **4.3** – Preview UI queue drawer, keyboard shortcuts (`Shift+A`, `Shift+X`, `J/K`, `Shift+?`), optimistic updates, manual override log, RTL test coverage.
 - **4.1.6** – `apply plan --browser-discovery` enriches plans with SERP artifacts; Programmable Search mode; guardrail updates for Google domains.
 - **3.3** – `apply open` replays stored SimplyHired form plans; `FormFillExecutor` + `ProfileAnswerResolver` telemetry; `formFill` persistence.

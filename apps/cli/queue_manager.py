@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Mapping, Optional
 
 from .run_store import RunRecord, RunStore
@@ -14,6 +14,7 @@ CandidateState = str
 QueueMode = str
 DecisionOutcome = str
 DecisionMode = str
+CandidateAssignment = str
 
 
 def _now_iso() -> str:
@@ -23,6 +24,13 @@ def _now_iso() -> str:
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+def _parse_iso8601(value: str) -> datetime:
+    """Parse a subset of ISO-8601 strings ending with `Z` for UTC."""
+
+    cleaned = value.replace("Z", "+00:00")
+    return datetime.fromisoformat(cleaned)
 
 
 @dataclass
@@ -35,6 +43,8 @@ class ApplicationCandidate:
     discovered_at: str
     state: CandidateState = "discovered"
     last_decision_id: Optional[str] = None
+    assigned_mode: CandidateAssignment = "human"
+    updated_at: str = field(default_factory=_now_iso)
 
     def to_payload(self) -> Dict[str, object]:
         payload: Dict[str, object] = {
@@ -42,6 +52,8 @@ class ApplicationCandidate:
             "posting": dict(self.posting),
             "discoveredAt": self.discovered_at,
             "state": self.state,
+            "assignedMode": self.assigned_mode,
+            "updatedAt": self.updated_at,
         }
         if self.form_plan_path:
             payload["formPlanPath"] = self.form_plan_path
@@ -58,6 +70,8 @@ class ApplicationCandidate:
             discovered_at=str(payload.get("discoveredAt")),
             state=str(payload.get("state", "discovered")),
             last_decision_id=payload.get("lastDecisionId") or None,
+            assigned_mode=str(payload.get("assignedMode", "human")),
+            updated_at=str(payload.get("updatedAt", _now_iso())),
         )
 
     def update_from(self, other: "ApplicationCandidate") -> None:
@@ -67,6 +81,8 @@ class ApplicationCandidate:
         self.state = other.state
         if other.last_decision_id:
             self.last_decision_id = other.last_decision_id
+        self.assigned_mode = other.assigned_mode or self.assigned_mode
+        self.updated_at = other.updated_at or self.updated_at
 
 
 @dataclass
@@ -227,9 +243,12 @@ class ReviewQueueManager:
         existing = self._snapshot.find_candidate(candidate.id)
         if existing:
             existing.update_from(candidate)
+            target = existing
         else:
             self._snapshot.pending.append(candidate)
-        self._touch(reason="candidate.enqueued")
+            target = candidate
+        timestamp = self._touch(reason="candidate.enqueued")
+        target.updated_at = timestamp
         return self._persist()
 
     def update_state(
@@ -245,7 +264,8 @@ class ReviewQueueManager:
         candidate.state = state
         if form_plan_path:
             candidate.form_plan_path = form_plan_path
-        self._touch(reason=f"candidate.state.{state}")
+        timestamp = self._touch(reason=f"candidate.state.{state}")
+        candidate.updated_at = timestamp
         return self._persist()
 
     def record_decision(
@@ -275,40 +295,140 @@ class ReviewQueueManager:
             candidate.state = "submitted"
         else:
             candidate.state = "decided"
-        self._touch(reason="candidate.decision.recorded")
+        timestamp = self._touch(reason="candidate.decision.recorded")
+        candidate.updated_at = timestamp
         return self._persist()
 
     def escalate(self, candidate_id: str) -> ReviewQueueSnapshot:
-        candidate = self._snapshot.find_candidate(candidate_id)
-        if not candidate:
-            raise KeyError(candidate_id)
-        self._snapshot.pending = [c for c in self._snapshot.pending if c.id != candidate_id]
-        candidate.state = "awaiting_decision"
-        self._snapshot.escalated.append(candidate)
-        self._touch(reason="candidate.escalated")
-        return self._persist()
+        return self.assign_mode(
+            candidate_id,
+            "human",
+            trigger="manual_escalate",
+            reason="escalate",
+        )
 
     def reload(self) -> ReviewQueueSnapshot:
         payload = self._run_store.load_queue_snapshot(self._run_record)
         self._snapshot = ReviewQueueSnapshot.from_payload(payload)
         return self._snapshot
 
-    def _touch(self, *, reason: str) -> None:
-        self._snapshot.last_updated = _now_iso()
+    def assign_mode(
+        self,
+        candidate_id: str,
+        assigned_mode: CandidateAssignment,
+        *,
+        trigger: str = "manual_override",
+        reason: Optional[str] = None,
+    ) -> ReviewQueueSnapshot:
+        assigned_mode = assigned_mode.lower()
+        if assigned_mode not in {"human", "ai"}:
+            raise ValueError(assigned_mode)
+
+        existing = self._snapshot.find_candidate(candidate_id)
+        if not existing:
+            raise KeyError(candidate_id)
+        if existing.assigned_mode == assigned_mode:
+            return self._snapshot
+
+        candidate, source = self._pop_candidate(candidate_id)
+        candidate.state = "awaiting_decision"
+        destination: List[ApplicationCandidate]
+        if assigned_mode == "human":
+            destination = self._snapshot.escalated
+            telemetry_event = "AUTO_OVERRIDE" if trigger != "watchdog" else "AUTO_FAILSAFE_TRIGGERED"
+        else:
+            destination = self._snapshot.pending
+            telemetry_event = "queue.transition"
+        candidate.assigned_mode = assigned_mode
+        timestamp = self._touch(
+            reason=f"candidate.mode.{assigned_mode}",
+            telemetry_event=telemetry_event,
+            telemetry_extra={
+                "candidateId": candidate.id,
+                "trigger": trigger,
+                "assignedMode": assigned_mode,
+                "source": source,
+                "reason": reason or "",
+            },
+        )
+        candidate.updated_at = timestamp
+        if assigned_mode == "ai":
+            if candidate not in destination:
+                destination.append(candidate)
+            # remove duplicates from escalated when returning to AI mode
+            self._snapshot.escalated = [c for c in self._snapshot.escalated if c.id != candidate.id]
+        else:
+            if candidate not in destination:
+                destination.append(candidate)
+            self._snapshot.pending = [c for c in self._snapshot.pending if c.id != candidate.id]
+        return self._persist()
+
+    def enforce_watchdog(
+        self,
+        timeout_seconds: int,
+        *,
+        now: Optional[datetime] = None,
+    ) -> List[str]:
+        """Reassign stalled AI candidates back to the human lane."""
+
+        if timeout_seconds <= 0:
+            return []
+        threshold = timedelta(seconds=timeout_seconds)
+        current_time = now or datetime.now(timezone.utc)
+        reassigned: List[str] = []
+        for candidate in list(self._snapshot.pending):
+            if candidate.assigned_mode != "ai":
+                continue
+            try:
+                updated_at = _parse_iso8601(candidate.updated_at)
+            except ValueError:
+                updated_at = current_time - threshold
+            if current_time - updated_at >= threshold:
+                self.assign_mode(
+                    candidate.id,
+                    "human",
+                    trigger="watchdog",
+                    reason="timeout",
+                )
+                reassigned.append(candidate.id)
+        return reassigned
+
+    def _touch(
+        self,
+        *,
+        reason: str,
+        telemetry_event: Optional[str] = None,
+        telemetry_extra: Optional[Mapping[str, object]] = None,
+    ) -> str:
+        timestamp = _now_iso()
+        self._snapshot.last_updated = timestamp
         if self._telemetry:
-            self._telemetry(
-                {
-                    "event": "queue.transition",
-                    "reason": reason,
-                    "pending": len(self._snapshot.pending),
-                    "decided": len(self._snapshot.decided),
-                    "escalated": len(self._snapshot.escalated),
-                    "lastUpdated": self._snapshot.last_updated,
-                }
-            )
+            payload: Dict[str, object] = {
+                "event": telemetry_event or "queue.transition",
+                "reason": reason,
+                "pending": len(self._snapshot.pending),
+                "decided": len(self._snapshot.decided),
+                "escalated": len(self._snapshot.escalated),
+                "lastUpdated": timestamp,
+            }
+            if telemetry_extra:
+                payload.update(telemetry_extra)
+            self._telemetry(payload)
+        return timestamp
 
     def _persist(self) -> ReviewQueueSnapshot:
         payload = self._snapshot.to_payload()
         self._run_store.save_queue_snapshot(self._run_record, payload)
         return self._snapshot
+
+    def _pop_candidate(
+        self, candidate_id: str
+    ) -> tuple[ApplicationCandidate, str]:
+        for collection_name in ("pending", "escalated"):
+            collection = getattr(self._snapshot, collection_name)
+            for index, candidate in enumerate(collection):
+                if candidate.id == candidate_id:
+                    del collection[index]
+                    return candidate, collection_name
+        raise KeyError(candidate_id)
 

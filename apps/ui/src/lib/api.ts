@@ -57,6 +57,8 @@ export interface ApplicationCandidateSummary {
     | "submitted"
     | "shelved";
   lastDecisionId?: string;
+  assignedMode: "human" | "ai";
+  updatedAt?: string;
 }
 
 export interface SubmissionDecision {
@@ -169,4 +171,21 @@ export async function submitQueueDecision(
     const message = await extractErrorMessage(response);
     throw new Error(message);
   }
+}
+
+export async function overrideCandidateMode(
+  runId: string,
+  candidateId: string,
+  mode: "human" | "ai",
+  reason?: string
+): Promise<ReviewQueueSnapshot> {
+  const response = await fetch(`/api/queue/${runId}/${candidateId}/mode`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ mode, reason }),
+  });
+  const payload = await parseJson<{ queue: ReviewQueueSnapshot }>(response);
+  return payload.queue;
 }

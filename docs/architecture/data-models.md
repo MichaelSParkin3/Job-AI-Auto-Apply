@@ -142,6 +142,8 @@ export interface ApplicationCandidateSummary {
   discoveredAt: string;
   state: "discovered" | "planned" | "awaiting_decision" | "decided" | "submitted" | "shelved";
   lastDecisionId?: string;
+  assignedMode: "human" | "ai";
+  updatedAt?: string;
 }
 ```
 

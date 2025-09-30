@@ -4,6 +4,7 @@ import {
   createPreviewRun,
   editRun,
   fetchQueueSnapshot,
+  overrideCandidateMode,
   submitQueueDecision,
   type ApplicationCandidateSummary,
   type ReviewQueueSnapshot,
@@ -109,8 +110,10 @@ const App: React.FC = () => {
     removeOverride,
     suggestedOutcome,
     applyOptimisticDecision,
+    setCandidateMode,
   } = usePreviewStore();
   const [editOpen, setEditOpen] = React.useState(false);
+  const [overrideBusy, setOverrideBusy] = React.useState(false);
   const isLoading = status === "loading" || status === "editing";
   const isBusy = isLoading || decisionBusy;
 
@@ -301,6 +304,49 @@ const App: React.FC = () => {
     [queue, activeCandidateId]
   );
 
+  const handleTakeBack = React.useCallback(async () => {
+    if (!runId || !activeCandidate || overrideBusy) return;
+    const previousSnapshot = cloneSnapshot(queue);
+    const previousActiveId = activeCandidateId;
+    setCandidateMode(activeCandidate.id, "human");
+    setOverrideBusy(true);
+    try {
+      const snapshot = await overrideCandidateMode(
+        runId,
+        activeCandidate.id,
+        "human",
+        "take_back"
+      );
+      setQueueSnapshot(snapshot);
+      toast({
+        title: "Candidate reassigned to manual review",
+        description:
+          activeCandidate.posting?.title ?? "Candidate moved back to human lane.",
+      });
+    } catch (error) {
+      const description = error instanceof Error ? error.message : String(error);
+      if (previousSnapshot) {
+        set({ queue: previousSnapshot, activeCandidateId: previousActiveId });
+      }
+      toast({
+        title: "Failed to take back candidate",
+        description,
+        variant: "destructive",
+      });
+    } finally {
+      setOverrideBusy(false);
+    }
+  }, [
+    activeCandidate,
+    activeCandidateId,
+    overrideBusy,
+    queue,
+    runId,
+    set,
+    setCandidateMode,
+    setQueueSnapshot,
+  ]);
+
   const effectiveMessage = message ?? decisionError;
 
   return (
@@ -337,6 +383,27 @@ const App: React.FC = () => {
         )}
         {(status === "ready" || status === "editing" || status === "approved") && preview && (
           <>
+            {activeCandidate?.assignedMode === "ai" && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">AI review in progress</p>
+                    <p className="text-amber-700/80">
+                      This candidate is currently handled by the AI lane. Take back control to
+                      continue manual review.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-800 transition hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                    onClick={handleTakeBack}
+                    disabled={overrideBusy}
+                  >
+                    {overrideBusy ? "Reassigning…" : "Take Back"}
+                  </button>
+                </div>
+              </div>
+            )}
             <PreviewToolbar
               onApprove={handleApprove}
               onEscalate={handleEscalate}

@@ -1,0 +1,38 @@
+schema: 1
+story: '4.5'
+story_title: 'Human Override Controls & Failsafes'
+gate: PASS
+status_reason: 'Queue drawer dialog now provides a Radix Description element, eliminating accessibility warnings and supplying screen-reader context.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-12-14T12:00:00Z'
+
+top_issues: []
+
+waiver:
+  active: false
+
+quality_score: 98
+expires: '2026-01-20T00:00:00Z'
+
+evidence:
+  tests_reviewed: 4
+  risks_identified: 1
+  trace:
+    ac_covered: [1, 2, 3, 4, 5]
+    ac_gaps: []
+    notes: 'Validated queue override API, CLI reassignment, watchdog requeue flows, and preview banner UX through pytest suites and Vitest run; hashed rationale persistence confirmed during CLI manager assertions and queue drawer description asserted for accessibility.'
+
+nfr_validation:
+  _assessed: [accessibility, auditability]
+  accessibility:
+    status: PASS
+    notes: 'Queue drawer exposes a Radix Description node with contextual copy; Vitest assertion guards against regressions.'
+  auditability:
+    status: PASS
+    notes: 'Queue manager tests confirm hashed rationale persistence and telemetry payloads continue to include override metadata.'
+
+recommendations:
+  immediate:
+    - 'Maintain the Radix description coverage during UI refactors; keep the Vitest assertion intact when touching the queue drawer.'
+  future:
+    - 'Audit other Radix dialogs to ensure each exposes titles and descriptions with automated test coverage.'

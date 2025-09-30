@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import os
 import types
 
 try:  # pragma: no cover - exercised when FastAPI is not installed
@@ -115,6 +116,11 @@ class DecisionRequest(BaseModel):
         )
 
 
+class ModeOverrideRequest(BaseModel):
+    mode: str
+    reason: Optional[str] = None
+
+
 class ApiHttpException(HTTPException):
     """Wrap structured API errors for consistent JSON responses."""
 
@@ -183,6 +189,7 @@ def create_app(
     app.state.history_writer = history_writer
     app.state.run_context = run_context
     app.state.persistent = persistent
+    app.state.watchdog_timeout = int(os.environ.get("JAA_QUEUE_WATCHDOG_TIMEOUT", "30"))
 
     resolved_static = static_dir or DEFAULT_STATIC_DIR
     index_file = resolved_static / "index.html"
@@ -450,7 +457,12 @@ def create_app(
         if persistent and run_store is not None and run_record is not None:
             if run_id != run_record.id:
                 _api_error(404, "run_not_found", "Run not found")
-            return run_store.load_queue_snapshot(run_record)
+            manager = ReviewQueueManager(
+                run_store=run_store,
+                run_record=run_record,
+            )
+            manager.enforce_watchdog(app.state.watchdog_timeout)
+            return manager.snapshot.to_payload()
 
         state = _assert_run(run_id)
         queue = state.get("queue")
@@ -492,6 +504,8 @@ def create_app(
                     queue_payload=queue_snapshot,
                     decision_payload=stored_decision,
                 )
+            manager.enforce_watchdog(app.state.watchdog_timeout)
+            state["queue"] = manager.snapshot.to_payload()
             return {"decision": stored_decision, "queue": state["queue"]}
 
         state = _assert_run(run_id)
@@ -518,5 +532,104 @@ def create_app(
                 break
         queue["lastUpdated"] = decision_payload["timestamp"]
         return {"decision": decision_payload, "queue": queue}
+
+    @app.put("/api/queue/{run_id}/{candidate_id}/mode")
+    async def queue_override(
+        run_id: str, candidate_id: str, body: ModeOverrideRequest
+    ) -> Dict[str, Any]:
+        desired_mode = body.mode.lower()
+        if desired_mode not in {"human", "ai"}:
+            _api_error(400, "invalid_mode", "Mode must be 'human' or 'ai'")
+
+        if persistent and run_store is not None and run_record is not None:
+            if run_id != run_record.id:
+                _api_error(404, "run_not_found", "Run not found")
+            manager = ReviewQueueManager(
+                run_store=run_store,
+                run_record=run_record,
+            )
+            current_candidate = manager.snapshot.find_candidate(candidate_id)
+            if not current_candidate:
+                _api_error(
+                    404,
+                    "candidate_not_found",
+                    f"Candidate {candidate_id} not found in queue",
+                    details={"candidateId": candidate_id},
+                )
+            if current_candidate.assigned_mode == desired_mode:
+                return {
+                    "queue": manager.snapshot.to_payload(),
+                    "mode": desired_mode,
+                }
+            try:
+                snapshot = manager.assign_mode(
+                    candidate_id,
+                    desired_mode,
+                    trigger="api_override",
+                    reason=body.reason,
+                )
+            except KeyError:
+                _api_error(
+                    404,
+                    "candidate_not_found",
+                    f"Candidate {candidate_id} not found in queue",
+                    details={"candidateId": candidate_id},
+                )
+            except ValueError:
+                _api_error(400, "invalid_mode", "Mode must be 'human' or 'ai'")
+
+            run_store.record_queue_override(
+                run_record,
+                candidate_id=candidate_id,
+                assigned_mode=desired_mode,
+                reason=body.reason,
+                trigger="api_override",
+            )
+            manager.enforce_watchdog(app.state.watchdog_timeout)
+            state = _sync_persistent_state()
+            state["queue"] = manager.snapshot.to_payload()
+            if history_writer is not None and run_context is not None and body.reason:
+                log_event(
+                    {
+                        "event": "queue.override.reasoned",
+                        "candidateId": candidate_id,
+                        "mode": desired_mode,
+                        "reason": body.reason,
+                        "runId": run_id,
+                    }
+                )
+            return {"queue": state["queue"], "mode": desired_mode}
+
+        state = _assert_run(run_id)
+        queue = state.get("queue")
+        if not queue:
+            _api_error(404, "queue_not_found", "Queue not found for run")
+        pending = queue.get("pending", [])
+        escalated = queue.get("escalated", [])
+        collections = {"pending": pending, "escalated": escalated}
+        source = None
+        target_collection = pending if desired_mode == "ai" else escalated
+        for collection_name, collection in collections.items():
+            for index, candidate in enumerate(collection):
+                if candidate.get("id") == candidate_id:
+                    source = collection_name
+                    candidate["assignedMode"] = desired_mode
+                    candidate["state"] = "awaiting_decision"
+                    candidate["updatedAt"] = _now_iso()
+                    if collection_name != ("pending" if desired_mode == "ai" else "escalated"):
+                        collection.pop(index)
+                        target_collection.append(candidate)
+                    break
+            if source:
+                break
+        if not source:
+            _api_error(
+                404,
+                "candidate_not_found",
+                f"Candidate {candidate_id} not found in queue",
+                details={"candidateId": candidate_id},
+            )
+        queue["lastUpdated"] = _now_iso()
+        return {"queue": queue, "mode": desired_mode}
 
     return app

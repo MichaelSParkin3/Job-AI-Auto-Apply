@@ -91,7 +91,6 @@ export function QueueDrawer({
               handleClose();
             }
           }}
-          aria-describedby="queue-drawer-description"
         >
           <div
             className="flex items-center justify-between border-b px-4 py-3"
@@ -112,9 +111,13 @@ export function QueueDrawer({
               </button>
             </DialogPrimitive.Close>
           </div>
-          <p id="queue-drawer-description" className="sr-only" data-queue-drawer>
+          <DialogPrimitive.Description
+            id="queue-drawer-description"
+            className="sr-only"
+            data-queue-drawer
+          >
             Review queue details for pending, escalated, and decided candidates. Focus remains inside the drawer while it is open.
-          </p>
+          </DialogPrimitive.Description>
           <div className="h-full overflow-y-auto px-4 pb-6 pt-3 text-sm" data-queue-drawer>
             <StatusSection
               label="Pending"
@@ -229,6 +232,16 @@ function StatusSection({
               <span className="font-semibold block">{formatCandidate(candidate)}</span>
               <span className="text-muted-foreground block text-[11px]">
                 {candidate.state.replace(/_/g, " ")}
+              </span>
+              <span
+                className={cn(
+                  "mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                  candidate.assignedMode === "ai"
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-slate-100 text-slate-600"
+                )}
+              >
+                {candidate.assignedMode === "ai" ? "AI lane" : "Human lane"}
               </span>
             </button>
           </li>
