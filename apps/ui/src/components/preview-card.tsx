@@ -1,5 +1,6 @@
 ﻿import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
+import type { ApplicationCandidateSummary, ManualOverrideEntry } from "../lib/api";
 import type { PreviewMetadata } from "../store/preview-store";
 
 function formatProfileDisplay(metadata?: PreviewMetadata): string {
@@ -33,6 +34,9 @@ interface PreviewCardProps {
   decision?: string;
   decidedAt?: string;
   metadata?: PreviewMetadata;
+  suggestedOutcome?: string;
+  overrides?: ManualOverrideEntry[];
+  candidate?: ApplicationCandidateSummary;
 }
 
 export function PreviewCard({
@@ -43,6 +47,9 @@ export function PreviewCard({
   decision,
   decidedAt,
   metadata,
+  suggestedOutcome,
+  overrides,
+  candidate,
 }: PreviewCardProps) {
   const startedAtLabel = metadata?.startedAt
     ? new Date(metadata.startedAt).toLocaleString()
@@ -65,6 +72,14 @@ export function PreviewCard({
             </span>
           )}
         </CardTitle>
+        {suggestedOutcome && (
+          <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 font-medium text-slate-700">
+              {suggestedOutcome}
+            </span>
+            <span className="text-[11px]">Queue state last refreshed {metadata?.startedAt ? new Date(metadata.startedAt).toLocaleDateString() : "recently"}</span>
+          </div>
+        )}
       </CardHeader>
       <CardContent className="grid gap-4 md:grid-cols-[2fr,1fr]">
         <figure className="overflow-hidden rounded-lg border bg-muted">
@@ -81,6 +96,25 @@ export function PreviewCard({
                 {summary}
               </p>
             </section>
+            {candidate && (
+              <section>
+                <h2 className="text-sm font-semibold text-muted-foreground">Active Candidate</h2>
+                <div className="mt-2 space-y-1 text-sm leading-relaxed text-foreground/80">
+                  <p className="font-semibold">
+                    {candidate.posting?.title ?? "Unassigned role"}
+                  </p>
+                  <p className="text-muted-foreground">
+                    {candidate.posting?.company ?? "Unknown company"}
+                  </p>
+                  {candidate.posting?.location && (
+                    <p className="text-muted-foreground">{candidate.posting.location}</p>
+                  )}
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground/80">
+                    {candidate.state.replace(/_/g, " ")}
+                  </p>
+                </div>
+              </section>
+            )}
             {notes && (
               <section>
                 <h2 className="text-sm font-semibold text-muted-foreground">Notes</h2>
@@ -118,6 +152,18 @@ export function PreviewCard({
                 )}
               </dl>
             </section>
+            {overrides && overrides.length > 0 && (
+              <section>
+                <h2 className="text-sm font-semibold text-muted-foreground">Recent Overrides</h2>
+                <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  {overrides.slice(-3).map((entry) => (
+                    <li key={entry.decision.decisionId}>
+                      {new Date(entry.createdAt).toLocaleString()} · {entry.decision.outcome === "needs_review" ? "Escalated" : "Approved"}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </aside>
         </CardContent>
       </Card>

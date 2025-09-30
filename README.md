@@ -2,7 +2,13 @@
 
 Local-first, review-first automation for job applications. This repo now ships the end-to-end dry-run demo experience: a Typer CLI that boots a FastAPI preview service, serves a React UI, and lets you approve/decline edits before anything is submitted.
 
-Status: Story 4.1.6 (Lever plan Browser discovery) implemented.
+Status: Story 4.3 (Preview queue drawer & keyboard flow) implemented.
+
+## What’s New in 4.3
+- Preview UI now loads the review queue snapshot, surfaces pending/escalated/decided candidates, and persists drawer visibility per session.
+- Keyboard shortcuts (`Shift+A` approve, `Shift+X` escalate, `J/K` navigate, `Shift+?` legend) manage queue navigation and decisions with optimistic updates and error rollback.
+- Suggested outcome pill and manual override log highlight current queue state alongside the selected candidate’s summary.
+- React Testing Library suites cover queue rendering, navigation, shortcut legend toggling, optimistic success, and error rollback flows.
 
 ## What’s New in 4.1.6
 - `python app.py apply plan --source lever-google` can launch Browser-Use with `--browser-discovery` to capture SERP HTML,
@@ -126,6 +132,7 @@ pip install -e .[dev]
 pytest apps/cli/tests/test_queue_manager.py
 pytest apps/preview/tests/test_queue_endpoints.py
 pytest sites/lever/tests/test_lever_queue_restart.py
+pnpm --filter @app/ui test
 ```
 
 If you prefer a minimal install, include `fastapi` and `httpx` alongside `pytest` as shown in the setup section above.

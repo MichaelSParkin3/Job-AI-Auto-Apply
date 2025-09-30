@@ -1,37 +1,118 @@
-﻿import * as React from "react";
+import * as React from "react";
 
-import { abortRun, approveRun, createPreviewRun, editRun } from "./lib/api";
+import {
+  createPreviewRun,
+  editRun,
+  fetchQueueSnapshot,
+  submitQueueDecision,
+  type ApplicationCandidateSummary,
+  type ReviewQueueSnapshot,
+  type SubmissionDecision,
+} from "./lib/api";
 import { DryRunBanner } from "./components/dry-run-banner";
 import { EditDialog } from "./components/edit-dialog";
 import { PreviewCard } from "./components/preview-card";
 import { PreviewToolbar } from "./components/preview-toolbar";
+import { QueueDrawer } from "./components/queue-drawer";
+import { ShortcutLegend } from "./components/shortcut-legend";
 import { Toaster, toast } from "./components/ui/use-toast";
+import { cn } from "./lib/utils";
 import { usePreviewStore } from "./store/preview-store";
 import type { PreviewStatus } from "./store/preview-store";
 
+const POLL_INTERVAL_MS = 15000;
+
 const useKeyboardShortcuts = (
-  handlers: Record<string, () => void>,
-  enabled: boolean
+  enabled: boolean,
+  {
+    onApprove,
+    onEscalate,
+    onNext,
+    onPrevious,
+    onToggleLegend,
+    onOpenEdit,
+  }: {
+    onApprove: () => void;
+    onEscalate: () => void;
+    onNext: () => void;
+    onPrevious: () => void;
+    onToggleLegend: () => void;
+    onOpenEdit?: () => void;
+  }
 ) => {
   React.useEffect(() => {
     if (!enabled) return;
     const listener = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (shouldIgnoreEvent(event)) return;
       const key = event.key.toLowerCase();
-      if (handlers[key]) {
+      if (event.shiftKey && key === "a") {
         event.preventDefault();
-        handlers[key]!();
+        onApprove();
+        return;
+      }
+      if (event.shiftKey && key === "x") {
+        event.preventDefault();
+        onEscalate();
+        return;
+      }
+      if (event.shiftKey && event.key === "?") {
+        event.preventDefault();
+        onToggleLegend();
+        return;
+      }
+      if (!event.shiftKey && key === "j") {
+        event.preventDefault();
+        onNext();
+        return;
+      }
+      if (!event.shiftKey && key === "k") {
+        event.preventDefault();
+        onPrevious();
+        return;
+      }
+      if (!event.shiftKey && key === "e" && onOpenEdit) {
+        event.preventDefault();
+        onOpenEdit();
       }
     };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, [handlers, enabled]);
+  }, [enabled, onApprove, onEscalate, onNext, onPrevious, onToggleLegend, onOpenEdit]);
 };
 
 const App: React.FC = () => {
-  const { runId, status, preview, dryRun, metadata, set, message } =
-    usePreviewStore();
+  const {
+    runId,
+    status,
+    preview,
+    dryRun,
+    metadata,
+    set,
+    message,
+    queue,
+    setQueueSnapshot,
+    activeCandidateId,
+    selectCandidate,
+    selectNextCandidate,
+    selectPreviousCandidate,
+    drawerOpen,
+    setDrawerOpen,
+    legendVisible,
+    setLegendVisible,
+    decisionBusy,
+    setDecisionBusy,
+    decisionError,
+    setDecisionError,
+    overrides,
+    addOverride,
+    removeOverride,
+    suggestedOutcome,
+    applyOptimisticDecision,
+  } = usePreviewStore();
   const [editOpen, setEditOpen] = React.useState(false);
-  const isBusy = status === "loading" || status === "editing";
+  const isLoading = status === "loading" || status === "editing";
+  const isBusy = isLoading || decisionBusy;
 
   const toPreviewStatus = React.useCallback(
     (value: string | undefined, fallback: PreviewStatus): PreviewStatus => {
@@ -41,6 +122,18 @@ const App: React.FC = () => {
     },
     []
   );
+
+  const refreshQueue = React.useCallback(async () => {
+    if (!runId) return;
+    try {
+      const snapshot = await fetchQueueSnapshot(runId);
+      setQueueSnapshot(snapshot);
+      setDecisionError(undefined);
+    } catch (error) {
+      const description = error instanceof Error ? error.message : String(error);
+      setDecisionError(description);
+    }
+  }, [runId, setQueueSnapshot, setDecisionError]);
 
   React.useEffect(() => {
     let mounted = true;
@@ -65,59 +158,99 @@ const App: React.FC = () => {
     return () => {
       mounted = false;
     };
-  }, [set]);
+  }, [set, toPreviewStatus]);
 
-  const handleApprove = React.useCallback(async () => {
+  React.useEffect(() => {
     if (!runId) return;
-    set({ status: "loading", message: undefined });
-    try {
-      const result = await approveRun(runId);
-      set({
-        status: toPreviewStatus(result.status, "approved"),
-        preview: result.preview ?? preview,
-        metadata: result.metadata ?? metadata,
-      });
-      toast({
-        title: "Preview approved",
-        description:
-          result.message ?? "Submission will remain in dry-run mode.",
-      });
-    } catch (error) {
-      const description = error instanceof Error ? error.message : String(error);
-      set({ status: "error", message: description });
-      toast({
-        title: "Failed to approve",
-        description,
-        variant: "destructive",
-      });
-    }
-  }, [metadata, preview, runId, set, toPreviewStatus]);
+    refreshQueue();
+  }, [runId, refreshQueue]);
 
-  const handleAbort = React.useCallback(async () => {
+  React.useEffect(() => {
     if (!runId) return;
-    set({ status: "loading", message: undefined });
-    try {
-      const result = await abortRun(runId);
-      set({
-        status: toPreviewStatus(result.status, "aborted"),
-        preview: result.preview ?? preview,
-        metadata: result.metadata ?? metadata,
-      });
-      toast({
-        title: "Preview aborted",
-        description:
-          result.message ?? "Dry run halted without sending a submission.",
-      });
-    } catch (error) {
-      const description = error instanceof Error ? error.message : String(error);
-      set({ status: "error", message: description });
-      toast({
-        title: "Failed to abort",
-        description,
-        variant: "destructive",
-      });
-    }
-  }, [metadata, preview, runId, set, toPreviewStatus]);
+    const interval = window.setInterval(() => {
+      refreshQueue();
+    }, POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [runId, refreshQueue]);
+
+  const handleDecision = React.useCallback(
+    async (outcome: "approve" | "needs_review") => {
+      if (!runId || !queue || decisionBusy) return;
+      const candidate =
+        (activeCandidateId &&
+          getActiveCandidate(queue, activeCandidateId)) ??
+        queue.pending[0] ??
+        queue.escalated[0];
+      if (!candidate) {
+        toast({
+          title: "No candidate available",
+          description: "Select a candidate from the queue to record a decision.",
+          variant: "destructive",
+        });
+        return;
+      }
+      const previousSnapshot = cloneSnapshot(queue);
+      const previousActiveId = activeCandidateId;
+      const decision: SubmissionDecision = {
+        decisionId: generateDecisionId(),
+        candidateId: candidate.id,
+        outcome,
+        mode: "human",
+        confidence: outcome === "approve" ? 0.9 : 0.5,
+        timestamp: new Date().toISOString(),
+      };
+      setDecisionBusy(true);
+      setDecisionError(undefined);
+      applyOptimisticDecision(candidate.id, decision);
+      addOverride({ decision, createdAt: decision.timestamp });
+      selectNextCandidate();
+      try {
+        await submitQueueDecision(runId, decision);
+        toast({
+          title: outcome === "approve" ? "Candidate approved" : "Candidate escalated",
+          description:
+            candidate.posting?.title ?? "Decision recorded for queued candidate.",
+        });
+        await refreshQueue();
+      } catch (error) {
+        const description = error instanceof Error ? error.message : String(error);
+        removeOverride(decision.decisionId);
+        set({
+          queue: previousSnapshot ?? queue,
+          activeCandidateId: previousActiveId,
+        });
+        setDecisionError(description);
+        toast({
+          title: "Failed to record decision",
+          description,
+          variant: "destructive",
+        });
+      } finally {
+        setDecisionBusy(false);
+      }
+    },
+    [
+      runId,
+      queue,
+      decisionBusy,
+      activeCandidateId,
+      setDecisionBusy,
+      setDecisionError,
+      applyOptimisticDecision,
+      addOverride,
+      selectNextCandidate,
+      refreshQueue,
+      removeOverride,
+      set,
+    ]
+  );
+
+  const handleApprove = React.useCallback(() => handleDecision("approve"), [handleDecision]);
+
+  const handleEscalate = React.useCallback(
+    () => handleDecision("needs_review"),
+    [handleDecision]
+  );
 
   const handleEditSubmit = React.useCallback(
     async (text: string) => {
@@ -134,8 +267,7 @@ const App: React.FC = () => {
         });
         toast({
           title: "Edit captured",
-          description:
-            result.message ?? "Preview updated with your manual note.",
+          description: result.message ?? "Preview updated with your manual note.",
         });
       } catch (error) {
         const description = error instanceof Error ? error.message : String(error);
@@ -152,37 +284,66 @@ const App: React.FC = () => {
     [metadata, preview, runId, set, toPreviewStatus]
   );
 
-  useKeyboardShortcuts(
-    {
-      a: handleApprove,
-      e: () => setEditOpen(true),
-      escape: handleAbort,
-    },
-    status === "ready" || status === "editing"
+  const shortcutsEnabled =
+    (status === "ready" || status === "editing") && !legendVisible && !editOpen;
+
+  useKeyboardShortcuts(shortcutsEnabled, {
+    onApprove: handleApprove,
+    onEscalate: handleEscalate,
+    onNext: selectNextCandidate,
+    onPrevious: selectPreviousCandidate,
+    onToggleLegend: () => setLegendVisible(!legendVisible),
+    onOpenEdit: () => setEditOpen(true),
+  });
+
+  const activeCandidate = React.useMemo(
+    () => (queue ? getActiveCandidate(queue, activeCandidateId) : undefined),
+    [queue, activeCandidateId]
   );
 
+  const effectiveMessage = message ?? decisionError;
+
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className={cn("min-h-screen bg-slate-100", drawerOpen && "sm:pl-80")}>
+      <QueueDrawer
+        open={drawerOpen}
+        snapshot={queue}
+        activeCandidateId={activeCandidateId}
+        onSelectCandidate={(candidateId) => selectCandidate(candidateId)}
+        onToggle={setDrawerOpen}
+        overrides={overrides}
+      />
+      {!drawerOpen && (
+        <button
+          type="button"
+          className="fixed left-4 top-24 z-30 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow"
+          onClick={() => setDrawerOpen(true)}
+        >
+          Show Queue
+        </button>
+      )}
       <DryRunBanner isDryRun={dryRun} />
       <main className="mx-auto grid max-w-5xl gap-6 px-4 py-10">
         <header className="space-y-2 text-center">
-          <h1 className="text-3xl font-bold tracking-tight">Review & Approve</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Review &amp; Decide</h1>
           <p className="text-muted-foreground">
-            Inspect the captured screenshot, request quick edits, or approve the submission before it ships.
+            Navigate the review queue, approve or escalate candidates, and keep manual overrides in sync with the API state.
           </p>
         </header>
-        {status === "error" && (
+        {effectiveMessage && (
           <div className="rounded-md border border-destructive bg-destructive/10 p-4 text-sm text-destructive">
-            {message ?? "An unexpected error occurred."}
+            {effectiveMessage}
           </div>
         )}
-        {(status === "ready" || status === "editing" || status === "approved" || status === "aborted") && preview && (
+        {(status === "ready" || status === "editing" || status === "approved") && preview && (
           <>
             <PreviewToolbar
               onApprove={handleApprove}
-              onAbort={handleAbort}
+              onEscalate={handleEscalate}
               onEdit={() => setEditOpen(true)}
+              onToggleLegend={() => setLegendVisible(!legendVisible)}
               isBusy={isBusy}
+              legendVisible={legendVisible}
             />
             <PreviewCard
               screenshotUrl={preview.screenshotUrl}
@@ -192,25 +353,24 @@ const App: React.FC = () => {
               decision={preview.decision}
               decidedAt={preview.decidedAt}
               metadata={metadata}
+              suggestedOutcome={suggestedOutcome}
+              overrides={overrides}
+              candidate={activeCandidate}
             />
           </>
         )}
         {status === "loading" && (
           <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
-            Preparing demo preview…
+            Preparing queue preview…
           </div>
         )}
         {status === "approved" && (
           <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
-            Preview approved. Submission would proceed if not in dry run.
-          </div>
-        )}
-        {status === "aborted" && (
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
-            Preview aborted. No action was taken.
+            Latest decision recorded. Queue will continue refreshing.
           </div>
         )}
       </main>
+      <ShortcutLegend open={legendVisible} onOpenChange={setLegendVisible} />
       <EditDialog open={editOpen} onOpenChange={setEditOpen} onSubmit={handleEditSubmit} />
       <Toaster />
     </div>
@@ -218,3 +378,46 @@ const App: React.FC = () => {
 };
 
 export default App;
+
+function shouldIgnoreEvent(event: KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  if (!target) return false;
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target.isContentEditable
+  );
+}
+
+function generateDecisionId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `decision_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getActiveCandidate(
+  snapshot: ReviewQueueSnapshot,
+  candidateId: string | undefined
+): ApplicationCandidateSummary | undefined {
+  if (!candidateId) {
+    return snapshot.pending[0] ?? snapshot.escalated[0];
+  }
+  return (
+    snapshot.pending.find((candidate) => candidate.id === candidateId) ??
+    snapshot.escalated.find((candidate) => candidate.id === candidateId)
+  );
+}
+
+function cloneSnapshot(
+  snapshot: ReviewQueueSnapshot | undefined
+): ReviewQueueSnapshot | undefined {
+  if (!snapshot) return undefined;
+  return {
+    ...snapshot,
+    pending: [...snapshot.pending],
+    escalated: [...snapshot.escalated],
+    decided: [...snapshot.decided],
+  };
+}
