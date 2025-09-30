@@ -56,12 +56,22 @@ def test_queue_manager_persists_transitions(tmp_path: Path) -> None:
     )
 
     manager.record_decision(decision)
+    stored_decision = store.record_submission_decision(record, decision.to_payload())
     raw_snapshot = json.loads(record.queue_path.read_text(encoding="utf-8"))
     assert raw_snapshot["pending"][0]["lastDecisionId"] == "dec-1"
     assert raw_snapshot["pending"][0]["state"] == "submitted"
     assert raw_snapshot["decided"][0]["decisionId"] == "dec-1"
+    assert raw_snapshot["decided"][0]["rationaleHash"].startswith("sha256:")
+    assert "rationale" not in raw_snapshot["decided"][0]
 
     manager.reload()
     assert manager.snapshot.pending[0].last_decision_id == "dec-1"
     assert manager.snapshot.pending[0].state == "submitted"
     assert manager.snapshot.decided[0].decision_id == "dec-1"
+    payload = manager.snapshot.decided[0].to_payload()
+    assert payload["rationaleHash"].startswith("sha256:")
+
+    run_payload = json.loads(record.run_json_path.read_text(encoding="utf-8"))
+    decision_entry = run_payload["decisions"][0]
+    assert decision_entry["artifactPath"].startswith("decisions/")
+    assert decision_entry["rationaleHash"] == stored_decision["rationaleHash"]

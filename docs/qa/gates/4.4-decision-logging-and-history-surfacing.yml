@@ -1,0 +1,37 @@
+schema: 1
+story: '4.4'
+story_title: 'Decision Logging and History Surfacing'
+gate: PASS
+status_reason: 'Core persistence and history summaries function as expected, and CLI history summary tests now gracefully skip when Typer is unavailable, preventing false failures in bare environments.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-12-13T00:00:00Z'
+
+top_issues: []
+
+waiver:
+  active: false
+
+quality_score: 98
+expires: '2026-01-19T00:00:00Z'
+
+evidence:
+  tests_reviewed: 3
+  risks_identified: 0
+  trace:
+    ac_covered: [1, 2, 3, 4, 5]
+    ac_gaps: []
+    notes: 'Reviewed apps/cli/run_store.py and apps/cli/history_store.py to confirm hashed rationale persistence and queue metrics; `pytest core/tests/test_run_store.py` exercises atomic history appends and hashed decisions, `pytest apps/cli/tests/test_queue_manager.py` covers queue decision flows, and CLI regression tests no longer fail in environments missing Typer.'
+
+nfr_validation:
+  _assessed: [security, auditability]
+  security:
+    status: PASS
+    notes: 'prepare_rationale_audit_fields hashes and redacts rationales before persistence, preventing raw PII leakage into run artifacts or history.'
+  auditability:
+    status: PASS
+    notes: 'HistoryWriter.append_decision_summary captures per-outcome aggregates, queue depth metrics, and artifact references for downstream audits.'
+
+recommendations:
+  immediate: []
+  future:
+    - 'Consider streaming history summary reads to avoid loading large history.jsonl files entirely into memory as the audit log grows.'

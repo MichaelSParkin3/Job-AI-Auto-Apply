@@ -478,10 +478,21 @@ def create_app(
                     details={"candidateId": body.candidateId},
                 )
             decision_payload = decision.to_payload()
-            run_store.record_submission_decision(run_record, decision_payload)
+            stored_decision = run_store.record_submission_decision(
+                run_record, decision_payload
+            )
+            queue_snapshot = snapshot.to_payload()
             state = _sync_persistent_state()
-            state["queue"] = snapshot.to_payload()
-            return {"decision": decision_payload, "queue": state["queue"]}
+            state["queue"] = queue_snapshot
+            if history_writer is not None and run_context is not None:
+                run_payload = run_store.load_run_payload(run_record)
+                history_writer.append_decision_summary(
+                    run_context,
+                    run_payload=run_payload,
+                    queue_payload=queue_snapshot,
+                    decision_payload=stored_decision,
+                )
+            return {"decision": stored_decision, "queue": state["queue"]}
 
         state = _assert_run(run_id)
         queue = state.get("queue")

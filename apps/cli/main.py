@@ -11,7 +11,7 @@ import types
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence
 from urllib.error import URLError
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -2504,6 +2504,134 @@ def history_path():
     """Show history folder path."""
     base = get_base_dir()
     typer.echo(str((base / "history").resolve()))
+
+
+@history_app.command("summary")
+def history_summary(
+    last: bool = typer.Option(False, "--last", help="Show only the most recent entry."),
+    limit: int = typer.Option(5, "--limit", min=1, max=100, help="Number of entries to display."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Return structured JSON instead of a table."
+    ),
+):
+    """Render aggregated decision history with queue depth metrics."""
+
+    base = get_base_dir()
+    history_path = base / "history" / "history.jsonl"
+    if not history_path.exists():
+        typer.secho("No history entries found. Run a preview/apply session first.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1)
+
+    lines = history_path.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        typer.secho("History file is empty.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1)
+
+    count = 1 if last else limit
+    selected = lines[-count:]
+    summaries = []
+    for line in reversed(selected):  # newest first
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        summaries.append(_summarize_history_entry(entry))
+
+    if not summaries:
+        typer.secho("No parsable history entries were found.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1)
+
+    if json_output:
+        typer.echo(json.dumps(summaries, ensure_ascii=False, indent=2))
+        return
+
+    _print_history_table(summaries)
+
+
+def _summarize_history_entry(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    decisions = entry.get("decisions") or {}
+    by_outcome = decisions.get("byOutcome") or {}
+    queue_depth = entry.get("queueDepth") or {}
+    approved = _safe_int(by_outcome.get("approve"))
+    aborted = _safe_int(by_outcome.get("abort"))
+    needs_review_direct = _safe_int(by_outcome.get("needs_review"))
+    edit_requests = _safe_int(by_outcome.get("edit_request"))
+    needs_review_total = needs_review_direct + edit_requests
+    escalated = _safe_int(queue_depth.get("escalated"))
+    pending = _safe_int(queue_depth.get("pending"))
+    decided = _safe_int(queue_depth.get("decided"))
+    decision_ref = entry.get("decision") or {}
+    return {
+        "runId": entry.get("id"),
+        "mode": entry.get("mode"),
+        "status": entry.get("status"),
+        "timestamp": entry.get("timestamp"),
+        "profileId": entry.get("profileId"),
+        "postingUrl": entry.get("postingUrl"),
+        "jobTitle": entry.get("jobTitle"),
+        "company": entry.get("company"),
+        "location": entry.get("location"),
+        "approved": approved,
+        "aborted": aborted,
+        "needs_review": needs_review_total,
+        "edit_requests": edit_requests,
+        "escalated": escalated,
+        "queue_pending": pending,
+        "queue_decided": decided,
+        "lastDecisionAt": decisions.get("lastDecisionAt"),
+        "decisionId": decision_ref.get("id"),
+        "rationaleRedacted": bool(decision_ref.get("rationaleRedacted", False)),
+    }
+
+
+def _print_history_table(rows: Sequence[Mapping[str, Any]]) -> None:
+    headers = [
+        "Run",
+        "Mode",
+        "Status",
+        "Approved",
+        "Escalated",
+        "Aborted",
+        "NeedsRev",
+        "Queue P/E/D",
+        "Last Decision",
+        "Redacted",
+    ]
+    table = []
+    for row in rows:
+        queue_repr = f"{row['queue_pending']}/{row['escalated']}/{row['queue_decided']}"
+        table.append(
+            [
+                str(row.get("runId") or "-"),
+                str(row.get("mode") or "-"),
+                str(row.get("status") or "-"),
+                str(row.get("approved", 0)),
+                str(row.get("escalated", 0)),
+                str(row.get("aborted", 0)),
+                str(row.get("needs_review", 0)),
+                queue_repr,
+                str(row.get("lastDecisionAt") or "-"),
+                "yes" if row.get("rationaleRedacted") else "no",
+            ]
+        )
+
+    widths = [
+        max(len(header), *(len(row[idx]) for row in table))
+        for idx, header in enumerate(headers)
+    ]
+    header_line = "  ".join(header.ljust(widths[idx]) for idx, header in enumerate(headers))
+    typer.secho(header_line, fg=typer.colors.CYAN)
+    divider = "  ".join("-" * width for width in widths)
+    typer.secho(divider, fg=typer.colors.CYAN)
+    for row in table:
+        typer.echo("  ".join(cell.ljust(widths[idx]) for idx, cell in enumerate(row)))
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 app.add_typer(apply_app, name="apply")

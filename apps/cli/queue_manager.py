@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Mapping, Optional
 
 from .run_store import RunRecord, RunStore
+from .redaction import prepare_rationale_audit_fields
 from .utils import log_event
 
 CandidateState = str
@@ -80,34 +81,80 @@ class SubmissionDecision:
     rationale: str
     timestamp: str
     requested_changes: Optional[List[Mapping[str, object]]] = None
+    rationale_hash: Optional[str] = None
+    rationale_redacted: Optional[bool] = None
+    rationale_length: Optional[int] = None
+    rationale_truncated: Optional[bool] = None
 
     def to_payload(self) -> Dict[str, object]:
+        metadata = self._ensure_rationale_metadata()
         payload: Dict[str, object] = {
             "decisionId": self.decision_id,
             "candidateId": self.candidate_id,
             "outcome": self.outcome,
             "mode": self.mode,
             "confidence": self.confidence,
-            "rationale": self.rationale,
             "timestamp": self.timestamp,
         }
         if self.requested_changes is not None:
             payload["requestedChanges"] = [dict(item) for item in self.requested_changes]
+        if metadata["rationaleHash"]:
+            payload["rationaleHash"] = metadata["rationaleHash"]
+            payload["rationaleRedacted"] = metadata["rationaleRedacted"]
+            payload["rationaleLength"] = metadata["rationaleLength"]
+            payload["rationaleTruncated"] = metadata["rationaleTruncated"]
+        if metadata["rationalePreview"]:
+            payload["rationalePreview"] = metadata["rationalePreview"]
         return payload
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> "SubmissionDecision":
         requested = payload.get("requestedChanges")
+        rationale_value = payload.get("rationalePreview") or payload.get("rationale") or ""
         return cls(
             decision_id=str(payload.get("decisionId")),
             candidate_id=str(payload.get("candidateId")),
             outcome=str(payload.get("outcome")),
             mode=str(payload.get("mode")),
             confidence=float(payload.get("confidence", 0.0)),
-            rationale=str(payload.get("rationale", "")),
+            rationale=str(rationale_value),
             timestamp=str(payload.get("timestamp")),
             requested_changes=list(requested) if isinstance(requested, Iterable) else None,
+            rationale_hash=(
+                str(payload.get("rationaleHash")) if payload.get("rationaleHash") else None
+            ),
+            rationale_redacted=bool(payload.get("rationaleRedacted", False)),
+            rationale_length=(
+                int(payload.get("rationaleLength"))
+                if payload.get("rationaleLength") is not None
+                else None
+            ),
+            rationale_truncated=bool(payload.get("rationaleTruncated", False)),
         )
+
+    def _ensure_rationale_metadata(self) -> Dict[str, object]:
+        """Compute and cache hashed rationale metadata for persistence."""
+
+        if self.rationale_hash and self.rationale_length is not None:
+            return {
+                "rationaleHash": self.rationale_hash,
+                "rationalePreview": self.rationale or None,
+                "rationaleRedacted": bool(self.rationale_redacted),
+                "rationaleTruncated": bool(self.rationale_truncated),
+                "rationaleLength": self.rationale_length,
+            }
+
+        audit = prepare_rationale_audit_fields(self.rationale or "")
+        self.rationale_hash = audit["rationaleHash"]
+        self.rationale_redacted = audit["rationaleRedacted"]
+        self.rationale_length = audit["rationaleLength"]
+        self.rationale_truncated = audit["rationaleTruncated"]
+        preview = audit["rationalePreview"]
+        if preview is not None:
+            self.rationale = preview
+        elif self.rationale:
+            self.rationale = ""
+        return audit
 
 
 @dataclass

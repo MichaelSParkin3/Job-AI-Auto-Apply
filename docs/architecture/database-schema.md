@@ -66,14 +66,29 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
   "$defs": {
     "SubmissionDecision": {
       "type": "object",
-      "required": ["decisionId", "candidateId", "outcome", "confidence", "mode", "timestamp"],
+      "required": [
+        "decisionId",
+        "candidateId",
+        "outcome",
+        "confidence",
+        "mode",
+        "timestamp",
+        "rationaleHash",
+        "rationaleRedacted",
+        "rationaleTruncated",
+        "rationaleLength"
+      ],
       "properties": {
         "decisionId": { "type": "string" },
         "candidateId": { "type": "string" },
         "outcome": { "type": "string", "enum": ["approve", "abort", "edit_request", "needs_review"] },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "mode": { "type": "string", "enum": ["human", "ai"] },
-        "rationale": { "type": "string" },
+        "rationalePreview": { "type": "string", "nullable": true },
+        "rationaleHash": { "type": "string" },
+        "rationaleRedacted": { "type": "boolean" },
+        "rationaleTruncated": { "type": "boolean" },
+        "rationaleLength": { "type": "integer", "minimum": 0 },
         "requestedChanges": {
           "type": "array",
           "items": {
@@ -86,13 +101,15 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
             }
           }
         },
+        "artifactPath": { "type": "string", "nullable": true },
         "timestamp": { "type": "string", "format": "date-time" }
       }
     },
     "ReviewQueueSnapshot": {
       "type": "object",
-      "required": ["pending", "decided", "escalated", "lastUpdated"],
+      "required": ["mode", "pending", "decided", "escalated", "lastUpdated"],
       "properties": {
+        "mode": { "type": "string", "enum": ["review", "auto_review", "auto_submit"] },
         "pending": {
           "type": "array",
           "items": { "$ref": "#/$defs/ApplicationCandidateSummary" }
@@ -159,6 +176,7 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
     "confirmation": { "type": "string", "nullable": true },
     "error": { "type": "string", "nullable": true },
     "runPath": { "type": "string", "nullable": true },
+    "queuePath": { "type": "string", "nullable": true },
     "screenshots": { "type": "array", "items": { "type": "string" }, "nullable": true },
     "autoReviewSummary": {
       "type": "object",
@@ -168,6 +186,63 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
         "escalated": { "type": "integer" },
         "autoSubmitted": { "type": "integer" },
         "averageConfidence": { "type": "number" }
+      }
+    },
+    "decisions": {
+      "type": "object",
+      "nullable": true,
+      "properties": {
+        "total": { "type": "integer" },
+        "byOutcome": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "byMode": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "latest": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "format": "date-time" }
+        },
+        "lastDecisionAt": { "type": "string", "format": "date-time", "nullable": true }
+      }
+    },
+    "queueDepth": {
+      "type": "object",
+      "nullable": true,
+      "properties": {
+        "pending": { "type": "integer" },
+        "decided": { "type": "integer" },
+        "escalated": { "type": "integer" },
+        "lastUpdated": { "type": "string", "format": "date-time", "nullable": true }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "nullable": true,
+      "required": [
+        "outcome",
+        "mode",
+        "confidence",
+        "timestamp",
+        "rationaleHash",
+        "rationaleRedacted",
+        "rationaleLength"
+      ],
+      "properties": {
+        "id": { "type": "string", "nullable": true },
+        "candidateId": { "type": "string", "nullable": true },
+        "outcome": { "type": "string", "enum": ["approve", "abort", "edit_request", "needs_review"] },
+        "mode": { "type": "string", "enum": ["human", "ai"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "artifactPath": { "type": "string", "nullable": true },
+        "rationalePreview": { "type": "string", "nullable": true },
+        "rationaleHash": { "type": "string" },
+        "rationaleRedacted": { "type": "boolean" },
+        "rationaleTruncated": { "type": "boolean" },
+        "rationaleLength": { "type": "integer", "minimum": 0 }
       }
     }
   }
