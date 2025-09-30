@@ -73,7 +73,7 @@ def test_queue_decision_persists_and_updates(queue_context):
     assert response.status_code == 200
     data = response.json()
     assert data["decision"]["decisionId"] == "dec-1"
-    assert data["queue"]["pending"][0]["state"] == "decided"
+    assert data["queue"]["pending"][0]["state"] == "submitted"
 
     run_payload = json.loads(record.run_json_path.read_text(encoding="utf-8"))
     decisions = run_payload.get("decisions", [])

@@ -58,9 +58,10 @@ def test_queue_manager_persists_transitions(tmp_path: Path) -> None:
     manager.record_decision(decision)
     raw_snapshot = json.loads(record.queue_path.read_text(encoding="utf-8"))
     assert raw_snapshot["pending"][0]["lastDecisionId"] == "dec-1"
-    assert raw_snapshot["pending"][0]["state"] == "decided"
+    assert raw_snapshot["pending"][0]["state"] == "submitted"
     assert raw_snapshot["decided"][0]["decisionId"] == "dec-1"
 
     manager.reload()
     assert manager.snapshot.pending[0].last_decision_id == "dec-1"
+    assert manager.snapshot.pending[0].state == "submitted"
     assert manager.snapshot.decided[0].decision_id == "dec-1"

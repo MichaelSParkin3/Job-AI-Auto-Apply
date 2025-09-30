@@ -225,7 +225,7 @@ class ReviewQueueManager:
         elif decision.outcome == "abort":
             candidate.state = "shelved"
         elif decision.outcome == "approve":
-            candidate.state = "decided"
+            candidate.state = "submitted"
         else:
             candidate.state = "decided"
         self._touch(reason="candidate.decision.recorded")

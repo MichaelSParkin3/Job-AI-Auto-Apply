@@ -498,9 +498,12 @@ def create_app(
         for candidate in queue.get("pending", []):
             if candidate.get("id") == decision_payload["candidateId"]:
                 candidate["lastDecisionId"] = decision_payload["decisionId"]
-                candidate["state"] = (
-                    "shelved" if decision_payload["outcome"] == "abort" else "decided"
-                )
+                if decision_payload["outcome"] == "abort":
+                    candidate["state"] = "shelved"
+                elif decision_payload["outcome"] == "approve":
+                    candidate["state"] = "submitted"
+                else:
+                    candidate["state"] = "decided"
                 break
         queue["lastUpdated"] = decision_payload["timestamp"]
         return {"decision": decision_payload, "queue": queue}

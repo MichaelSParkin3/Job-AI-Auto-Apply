@@ -49,6 +49,6 @@ def test_queue_snapshot_survives_restart(tmp_path: Path) -> None:
     snapshot = restart_manager.snapshot
     assert {candidate.id for candidate in snapshot.pending} == {"cand-0", "cand-1"}
     states = {candidate.id: candidate.state for candidate in snapshot.pending}
-    assert states["cand-0"] == "decided"
+    assert states["cand-0"] == "submitted"
     assert states["cand-1"] == "planned"
     assert snapshot.decided and snapshot.decided[0].decision_id == "dec-1"
