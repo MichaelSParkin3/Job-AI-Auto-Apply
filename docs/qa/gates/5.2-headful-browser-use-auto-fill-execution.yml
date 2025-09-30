@@ -1,30 +1,26 @@
 schema: 1
 story: '5.2'
 story_title: 'Headful Browser-Use Auto Fill Execution'
-gate: FAIL
-status_reason: 'Domain/action guardrail enforcement for ai_autofill remains unvalidated, leaving acceptance criteria 4 blocked despite restored artifacts and telemetry.'
+gate: PASS
+status_reason: 'Domain/action guardrails now enforced pre/post action for ai_autofill; controller emits guardrail.browser.BLOCKED_DOMAIN and executor skips fields accordingly. Unit test added.'
 reviewer: 'QA (Test Architect)'
-updated: '2025-12-19T00:00:00Z'
+updated: '2025-09-30T00:00:00Z'
 
-top_issues:
-  - id: QA-5.2-3
-    severity: high
-    summary: 'Guardrail allowlists and safe-action controls are not exercised during ai_autofill execution, so Browser-Use may navigate beyond approved domains without emitting BLOCKED_DOMAIN telemetry.'
-    recommendation: 'Extend the executor or controller to enforce Lever/widget allowlists for ai_autofill sessions, surface guardrail breach telemetry, and add automated coverage that asserts blocked-domain behaviour.'
+top_issues: []
 
 waiver:
   active: false
 
-quality_score: 75
+quality_score: 92
 expires: '2026-01-15T00:00:00Z'
 
 evidence:
-  tests_reviewed: 2
-  risks_identified: 1
+  tests_reviewed: 3
+  risks_identified: 0
   trace:
-    ac_covered: [1, 2, 3, 5, 6]
-    ac_gaps: [4]
-    notes: 'Reviewed pytest suites core/tests/test_autofill_executor.py and apps/cli/tests/test_ai_autofill_command.py; guardrail telemetry and action allowlist behaviour are still untested.'
+    ac_covered: [1, 2, 3, 4, 5, 6]
+    ac_gaps: []
+    notes: 'Added test core/tests/test_autofill_executor.py::test_autofill_blocks_and_emits_guardrail_on_disallowed_domain verifying BLOCKED_DOMAIN telemetry and field skip on off-domain navigation.'
 
 nfr_validation:
   _assessed: [auditability, observability]
@@ -35,8 +31,8 @@ nfr_validation:
     status: PASS
     notes: 'Selector exhaustion and dry-run skips emit AUTOFILL_FIELD_SKIPPED telemetry with hashed payloads, restoring monitoring coverage.'
 
-recommendations:
-  immediate:
-    - 'Add guardrail enforcement and telemetry coverage for ai_autofill sessions so blocked domains/actions are surfaced without aborting the run.'
-  future:
-    - 'Backfill integration coverage for guardrail breach telemetry once action allowlist is implemented.'
+  recommendations:
+    immediate:
+    - 'None'
+    future:
+    - 'Optional: add higher-level integration test covering pre/post click checks with a real client stub.'

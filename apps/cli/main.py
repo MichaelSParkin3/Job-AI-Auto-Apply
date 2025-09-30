@@ -714,6 +714,17 @@ def apply_plan(
         "--google-cse-cx",
         help="Override Google Programmable Search engine identifier.",
     ),
+    # Keep parity with `apply run` so callers can override planner prefs too
+    plan_model: Optional[str] = typer.Option(
+        None,
+        "--plan-model",
+        help="Override the LLM model used for Lever form plan refinement.",
+    ),
+    plan_llm: Optional[bool] = typer.Option(
+        None,
+        "--plan-llm/--no-plan-llm",
+        help="Enable or disable LLM enrichment for Lever form planning.",
+    ),
 ):
     """Plan discovery URLs for supported sources (lever-google review flow)."""
 
@@ -798,14 +809,18 @@ def apply_plan(
         if profile_plan_overrides.get("google_cse_cx"):
             plan_preferences["google_cse_cx"] = profile_plan_overrides["google_cse_cx"]
 
-    planner_model = settings.plan_model or settings.OPENROUTER_MODEL or settings.browser_model
+    # Planner preferences (not strictly needed for discovery-only, but
+    # preserved to keep behaviour consistent and allow future hooks)
+    planner_model = plan_model or settings.plan_model or settings.OPENROUTER_MODEL or settings.browser_model
     if planner_model is None:
         planner_model = settings.browser_model
     plan_llm_enabled_value = bool(settings.plan_llm_enabled)
-    if plan_model is None and profile_plan_overrides.get("model"):
-        planner_model = str(profile_plan_overrides["model"])
-    if plan_llm is None and profile_plan_overrides.get("llm_enabled") is not None:
+    if plan_llm is not None:
+        plan_llm_enabled_value = bool(plan_llm)
+    elif profile_plan_overrides.get("llm_enabled") is not None:
         plan_llm_enabled_value = bool(profile_plan_overrides["llm_enabled"])
+    if planner_model is None and profile_plan_overrides.get("model"):
+        planner_model = str(profile_plan_overrides["model"])
 
     use_cse = (
         plan_preferences["programmable_search"]

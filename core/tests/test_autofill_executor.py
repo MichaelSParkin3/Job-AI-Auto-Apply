@@ -10,6 +10,12 @@ from core.autofill.executor import (  # noqa: E402
     LeverAutofillField,
     LeverAutofillPlan,
 )
+from apps.browser import (
+    BrowserUseController,
+    BrowserLaunchConfig,
+    NavigationGuardrails,
+)
+import types
 
 
 class StubController:
@@ -241,4 +247,86 @@ def test_executor_emits_skip_telemetry_on_selector_exhaustion(tmp_path: Path) ->
         event["event"] == "AUTOFILL_FIELD_SKIPPED" and event.get("valueHash")
         for event in events
     )
+
+
+def test_autofill_blocks_and_emits_guardrail_on_disallowed_domain(tmp_path: Path) -> None:
+    """Executor should surface guardrail BLOCKED_DOMAIN and skip when page is off-allowlist."""
+
+    # Collect guardrail telemetry
+    guardrail_events: list[dict[str, Any]] = []
+
+    def record_guardrail(event: dict[str, Any]) -> None:
+        guardrail_events.append(event)
+
+    # Allowed domains restricted to Lever only
+    guardrails = NavigationGuardrails(
+        allowed_domains=("jobs.lever.co",),
+        wait_jitter_ms=(0, 0),
+        think_time_range_s=(0.0, 0.0),
+        event_logger=record_guardrail,
+    )
+
+    # Stub Browser-Use client reporting an off-domain current URL
+    class GuardrailTestClient:
+        def __init__(self) -> None:
+            self.page = types.SimpleNamespace(url="https://evil.example.com/")
+
+        def focus(self, selector: str, timeout: float | None = None) -> dict:
+            return {"ok": True}
+
+        def fill_text(self, selector: str, value: str, *, clear: bool = True) -> dict:
+            return {"ok": True}
+
+        def wait_for_idle(self, timeout: float = 5.0) -> dict:
+            return {"readyState": "idle"}
+
+        def get_page_content(self) -> str:
+            return "<html></html>"
+
+    profile_dir = tmp_path / "profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    launch = BrowserLaunchConfig(
+        profile_id="p1",
+        user_data_dir=profile_dir,
+        model="test-model",
+        viewport_width=1200,
+        viewport_height=800,
+        locale="en-US",
+        timezone="America/Los_Angeles",
+        guardrail_domains=("jobs.lever.co",),
+    )
+    controller = BrowserUseController(
+        launch,
+        client_factory=lambda _cfg: GuardrailTestClient(),
+        guardrails=guardrails,
+    )
+
+    # Telemetry from executor
+    exec_events: list[dict[str, Any]] = []
+
+    def record_exec(event: dict[str, Any]) -> None:
+        exec_events.append(event)
+
+    executor = AutofillExecutor(
+        controller=controller,
+        run_dir=tmp_path,
+        telemetry_callback=record_exec,
+        dry_run=False,
+    )
+    field = LeverAutofillField(
+        key="fullName",
+        value_key="fullName",
+        label="Full name",
+        selector="input#name",
+        field_type="text",
+        strategy="profile_answer",
+    )
+    plan = LeverAutofillPlan(candidate_id="cand-1", fields=[field])
+    result = executor.execute(plan, answers={"fullName": "Ada"})
+
+    # The controller should detect off-domain and block the action; executor skips the field
+    assert result.fields[0].status == "skipped"
+    assert result.fields[0].reason == "blocked_domain"
+    # Guardrail event must be present
+    assert any(e.get("event") == "guardrail.browser.BLOCKED_DOMAIN" for e in guardrail_events)
 
