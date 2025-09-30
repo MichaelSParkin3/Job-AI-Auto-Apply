@@ -9,7 +9,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from apps.preview.constants import (
     PLACEHOLDER_NOTES,
@@ -149,6 +149,37 @@ class RunStore:
             )
         )
         return record
+
+    def load_run_record(self, run_id: str) -> RunRecord:
+        """Return a RunRecord for an existing run directory."""
+
+        run_dir = self.runs_dir / run_id
+        if not run_dir.exists():
+            raise FileNotFoundError(run_id)
+        run_json_path = run_dir / "run.json"
+        if not run_json_path.exists():
+            raise FileNotFoundError(run_json_path)
+        payload = self._load_run_json(run_json_path)
+        started_at_raw = payload.get("startedAt") or datetime.now(timezone.utc).isoformat()
+        started_at = datetime.fromisoformat(started_at_raw.replace("Z", "+00:00"))
+        logs_path = run_dir / "actions.log"
+        logs_path.touch(exist_ok=True)
+        preview = payload.get("preview") or {}
+        screenshot_value = preview.get("screenshotPath")
+        screenshot_path = (
+            Path(screenshot_value)
+            if screenshot_value and Path(screenshot_value).exists()
+            else None
+        )
+        return RunRecord(
+            id=str(payload.get("id", run_id)),
+            started_at=started_at,
+            run_dir=run_dir,
+            run_json_path=run_json_path,
+            logs_path=logs_path,
+            profile_id=payload.get("profileId"),
+            screenshot_path=screenshot_path,
+        )
 
     def start_search_readiness_run(
         self,
@@ -666,6 +697,33 @@ class RunStore:
             decisions.append(decision_payload)
         self._write_run_json(record.run_json_path, payload)
         return decision_payload
+
+    def record_queue_override(
+        self,
+        record: RunRecord,
+        *,
+        candidate_id: str,
+        assigned_mode: str,
+        reason: Optional[str],
+        trigger: str,
+    ) -> Dict[str, Any]:
+        """Append a queue override entry to run.json for auditability."""
+
+        payload = self._load_run_json(record.run_json_path)
+        overrides: List[Dict[str, Any]] = payload.setdefault("overrides", [])  # type: ignore[assignment]
+        entry = {
+            "candidateId": candidate_id,
+            "mode": assigned_mode,
+            "reason": reason or "",
+            "trigger": trigger,
+            "timestamp": datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z"),
+        }
+        overrides.append(entry)
+        self._write_run_json(record.run_json_path, payload)
+        return entry
 
     def upsert_lever_candidate(
         self, record: RunRecord, candidate_id: str, payload: Mapping[str, Any]

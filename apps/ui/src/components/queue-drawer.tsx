@@ -230,6 +230,16 @@ function StatusSection({
               <span className="text-muted-foreground block text-[11px]">
                 {candidate.state.replace(/_/g, " ")}
               </span>
+              <span
+                className={cn(
+                  "mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                  candidate.assignedMode === "ai"
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-slate-100 text-slate-600"
+                )}
+              >
+                {candidate.assignedMode === "ai" ? "AI lane" : "Human lane"}
+              </span>
             </button>
           </li>
         ))}

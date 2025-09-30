@@ -35,11 +35,15 @@ const baseQueueSnapshot = {
       id: "cand-1",
       posting: { title: "Frontend Developer", company: "Acme" },
       state: "awaiting_decision" as const,
+      assignedMode: "human" as const,
+      updatedAt: "2025-01-01T00:00:00Z",
     },
     {
       id: "cand-2",
       posting: { title: "Backend Engineer", company: "Globex" },
       state: "awaiting_decision" as const,
+      assignedMode: "human" as const,
+      updatedAt: "2025-01-01T00:00:05Z",
     },
   ],
   escalated: [
@@ -47,6 +51,8 @@ const baseQueueSnapshot = {
       id: "cand-3",
       posting: { title: "Data Analyst", company: "Initech" },
       state: "awaiting_decision" as const,
+      assignedMode: "human" as const,
+      updatedAt: "2025-01-01T00:00:10Z",
     },
   ],
   decided: [],
@@ -126,7 +132,12 @@ describe("Preview App queue workflow", () => {
     const user = userEvent.setup();
     const updatedQueue = {
       ...baseQueueSnapshot,
-      pending: [baseQueueSnapshot.pending[0]],
+      pending: [
+        {
+          ...baseQueueSnapshot.pending[0],
+          updatedAt: "2025-01-01T00:00:15Z",
+        },
+      ],
       decided: [
         {
           decisionId: "d-1",
@@ -198,6 +209,58 @@ describe("Preview App queue workflow", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     await waitFor(() => expect(approveButton).not.toBeDisabled());
+  });
+
+  it("renders take back banner and calls override API", async () => {
+    const user = userEvent.setup();
+    const aiQueue = {
+      ...baseQueueSnapshot,
+      pending: [
+        {
+          ...baseQueueSnapshot.pending[0],
+          assignedMode: "ai" as const,
+        },
+      ],
+      escalated: [],
+    };
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse(mockPreviewResponse))
+      .mockResolvedValueOnce(mockResponse(aiQueue))
+      .mockResolvedValueOnce(
+        mockResponse({
+          queue: {
+            ...aiQueue,
+            escalated: [
+              {
+                ...aiQueue.pending[0],
+                assignedMode: "human" as const,
+              },
+            ],
+            pending: [],
+          },
+        })
+      );
+
+    // @ts-expect-error set global fetch for tests
+    global.fetch = fetchMock as FetchMock;
+
+    render(<App />);
+
+    await closeQueueDrawer(user);
+    await screen.findByText(/AI review in progress/i);
+    const takeBackButton = (await screen.findAllByText(/Take Back/i)).find(
+      (element): element is HTMLButtonElement => element instanceof HTMLButtonElement
+    );
+    expect(takeBackButton).toBeDefined();
+    await user.click(takeBackButton!);
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) => url === "/api/queue/demo123/cand-1/mode")
+      ).toBe(true)
+    );
   });
 
   it("rolls back optimistic decision on error and surfaces message", async () => {

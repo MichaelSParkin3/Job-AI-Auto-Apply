@@ -1,5 +1,7 @@
 import json
 import os
+import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -53,6 +55,7 @@ def test_queue_get_returns_snapshot(queue_context):
     data = response.json()
     assert data["pending"], "queue endpoint should expose pending candidates"
     assert data["pending"][0]["state"] == "awaiting_decision"
+    assert data["pending"][0]["assignedMode"] == "human"
 
 
 def test_queue_decision_persists_and_updates(queue_context):
@@ -100,3 +103,29 @@ def test_queue_decision_missing_candidate_returns_error(queue_context):
     assert response.status_code == 404
     data = response.json()
     assert data["error"]["code"] == "candidate_not_found"
+
+
+def test_queue_override_updates_mode(queue_context):
+    client: TestClient = queue_context["client"]
+    record = queue_context["record"]
+
+    response = client.put(
+        f"/api/queue/{record.id}/cand-1/mode",
+        json={"mode": "ai", "reason": "delegate"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "ai"
+    assert data["queue"]["pending"][0]["assignedMode"] == "ai"
+
+    queue_payload = json.loads(record.queue_path.read_text(encoding="utf-8"))
+    assert queue_payload["pending"][0]["assignedMode"] == "ai"
+
+    response = client.put(
+        f"/api/queue/{record.id}/cand-1/mode",
+        json={"mode": "human", "reason": "take_back"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "human"
+    assert data["queue"]["escalated"][0]["assignedMode"] == "human"

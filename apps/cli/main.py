@@ -2584,6 +2584,102 @@ def _summarize_history_entry(entry: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+@apply_app.command("queue")
+def apply_queue(
+    run: str = typer.Option(..., help="Run identifier to modify."),
+    candidate: str = typer.Option(..., help="Candidate identifier to override."),
+    action: str = typer.Option(
+        ..., help="Action to perform: escalate or assign-ai.", case_sensitive=False
+    ),
+    reason: Optional[str] = typer.Option(
+        None,
+        help="Optional human-readable reason stored with the override entry.",
+    ),
+):
+    """Manage queue overrides for a run without using the UI."""
+
+    base = get_base_dir()
+    store = RunStore(base=base)
+    try:
+        record = store.load_run_record(run)
+    except FileNotFoundError:
+        typer.secho(f"Run {run} not found.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    manager = ReviewQueueManager(run_store=store, run_record=record)
+    candidate_obj = manager.snapshot.find_candidate(candidate)
+    if not candidate_obj:
+        typer.secho(
+            f"Candidate {candidate} not present in queue {run}.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    normalized = action.lower().replace("_", "-")
+    trigger = "cli_override"
+    desired_mode: str
+    if normalized == "escalate":
+        desired_mode = "human"
+        default_reason = "escalate"
+        success_message = (
+            f"Candidate {candidate} escalated to human lane for run {run}."
+        )
+    elif normalized in {"assign-ai", "assignai", "assign"}:
+        desired_mode = "ai"
+        default_reason = "assign_ai"
+        success_message = (
+            f"Candidate {candidate} reassigned to AI lane for run {run}."
+        )
+    else:
+        typer.secho(
+            "Unsupported action. Use 'escalate' or 'assign-ai'.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    if candidate_obj.assigned_mode == desired_mode:
+        typer.secho(
+            f"Candidate {candidate} already assigned to {desired_mode} mode.",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(code=0)
+
+    try:
+        manager.assign_mode(
+            candidate,
+            desired_mode,
+            trigger=trigger,
+            reason=reason or default_reason,
+        )
+    except KeyError:
+        typer.secho(
+            f"Candidate {candidate} not present in queue {run}.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    store.record_queue_override(
+        record,
+        candidate_id=candidate,
+        assigned_mode=desired_mode,
+        reason=reason or default_reason,
+        trigger=trigger,
+    )
+
+    timeout = int(os.environ.get("JAA_QUEUE_WATCHDOG_TIMEOUT", "30"))
+    triggered = manager.enforce_watchdog(timeout)
+    if triggered:
+        typer.secho(
+            f"Watchdog reassigned {len(triggered)} candidate(s) to human lane.",
+            fg=typer.colors.YELLOW,
+        )
+
+    typer.secho(success_message, fg=typer.colors.GREEN)
+
+
 def _print_history_table(rows: Sequence[Mapping[str, Any]]) -> None:
     headers = [
         "Run",

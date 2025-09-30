@@ -127,7 +127,14 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
     },
     "ApplicationCandidateSummary": {
       "type": "object",
-      "required": ["id", "posting", "formPlanPath", "discoveredAt", "state"],
+      "required": [
+        "id",
+        "posting",
+        "formPlanPath",
+        "discoveredAt",
+        "state",
+        "assignedMode"
+      ],
       "properties": {
         "id": { "type": "string" },
         "posting": {
@@ -146,7 +153,9 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
           "type": "string",
           "enum": ["discovered", "planned", "awaiting_decision", "decided", "submitted", "shelved"]
         },
-        "lastDecisionId": { "type": "string" }
+        "lastDecisionId": { "type": "string" },
+        "assignedMode": { "type": "string", "enum": ["human", "ai"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
       }
     }
   }

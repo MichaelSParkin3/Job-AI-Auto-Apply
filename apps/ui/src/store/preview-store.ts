@@ -52,6 +52,7 @@ interface PreviewState {
   addOverride: (entry: ManualOverrideEntry) => void;
   removeOverride: (decisionId: string) => void;
   applyOptimisticDecision: (candidateId: string, decision: SubmissionDecision) => void;
+  setCandidateMode: (candidateId: string, mode: "human" | "ai") => void;
 }
 
 export const usePreviewStore = create<PreviewState>((set) => ({
@@ -190,6 +191,41 @@ export const usePreviewStore = create<PreviewState>((set) => ({
             decision,
           ]),
         },
+      };
+    }),
+  setCandidateMode: (candidateId, mode) =>
+    set((state) => {
+      if (!state.queue) {
+        return state;
+      }
+      const timestamp = new Date().toISOString();
+      const existing =
+        state.queue.pending.find((candidate) => candidate.id === candidateId) ??
+        state.queue.escalated.find((candidate) => candidate.id === candidateId);
+      if (!existing) {
+        return state;
+      }
+      const updated = {
+        ...existing,
+        assignedMode: mode,
+        state: "awaiting_decision" as const,
+        updatedAt: timestamp,
+      };
+      const pending = state.queue.pending.filter((candidate) => candidate.id !== candidateId);
+      const escalated = state.queue.escalated.filter((candidate) => candidate.id !== candidateId);
+      if (mode === "ai") {
+        pending.unshift(updated);
+      } else {
+        escalated.unshift(updated);
+      }
+      return {
+        ...state,
+        queue: {
+          ...state.queue,
+          pending,
+          escalated,
+        },
+        activeCandidateId: candidateId,
       };
     }),
 }));

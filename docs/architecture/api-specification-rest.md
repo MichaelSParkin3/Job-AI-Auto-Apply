@@ -137,6 +137,42 @@ paths:
               $ref: '#/components/schemas/SubmissionDecision'
       responses:
         '200': { description: OK }
+  /api/queue/{id}/{candidateId}/mode:
+    put:
+      summary: Override candidate lane assignment
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: candidateId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [human, ai]
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Queue snapshot reflecting override
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode: { type: string, enum: [human, ai] }
+                  queue:
+                    $ref: '#/components/schemas/ReviewQueueSnapshot'
   /api/queue/{id}/heartbeat:
     post:
       summary: Scheduler heartbeat for unattended runs
@@ -198,7 +234,7 @@ components:
         lastUpdated: { type: string, format: date-time }
     ApplicationCandidateSummary:
       type: object
-      required: [id, posting, state, discoveredAt]
+      required: [id, posting, state, discoveredAt, assignedMode]
       properties:
         id: { type: string }
         posting:
@@ -212,6 +248,8 @@ components:
         discoveredAt: { type: string, format: date-time }
         state: { type: string, enum: [discovered, planned, awaiting_decision, decided, submitted, shelved] }
         lastDecisionId: { type: string }
+        assignedMode: { type: string, enum: [human, ai] }
+        updatedAt: { type: string, format: date-time }
 ```
 
 ---

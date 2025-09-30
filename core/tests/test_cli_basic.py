@@ -48,6 +48,7 @@ if "pydantic" not in sys.modules:
     )
 sys.path.insert(0, os.getcwd())
 from apps.cli.history_store import HistoryWriter
+from apps.cli.queue_manager import ApplicationCandidate, ReviewQueueManager
 from apps.cli.main import app
 from apps.cli.run_store import RunStore
 from apps.cli.runtime_state import get_run_context, set_run_context
@@ -188,3 +189,42 @@ def test_history_summary_cli_outputs_json(tmp_path: Path, monkeypatch):
     assert result_table.exit_code == 0
     assert "Approved" in result_table.stdout
     set_run_context(None)
+
+
+def test_apply_queue_override_command(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("JAA_BASE_DIR", str(tmp_path))
+    store = RunStore(base=tmp_path)
+    record = store.start_demo_run(profile_id="qa")
+    manager = ReviewQueueManager(run_store=store, run_record=record)
+    candidate = ApplicationCandidate(
+        id="cand-override",
+        posting={"postingUrl": "https://example.com"},
+        form_plan_path=None,
+        discovered_at="2025-01-01T00:00:00Z",
+        state="awaiting_decision",
+        assigned_mode="ai",
+    )
+    manager.enqueue(candidate)
+    manager.assign_mode("cand-override", "ai", trigger="setup")
+
+    result = runner.invoke(
+        app,
+        [
+            "apply",
+            "queue",
+            "--run",
+            record.id,
+            "--candidate",
+            "cand-override",
+            "--action",
+            "escalate",
+            "--reason",
+            "manual review",
+        ],
+    )
+    assert result.exit_code == 0
+    queue_payload = store.load_queue_snapshot(record)
+    assert queue_payload["escalated"][0]["assignedMode"] == "human"
+    run_payload = store.load_run_payload(record)
+    overrides = run_payload.get("overrides", [])
+    assert overrides and overrides[-1]["mode"] == "human"
