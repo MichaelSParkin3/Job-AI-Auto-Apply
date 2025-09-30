@@ -9,6 +9,7 @@ apps/ui/src/
     PreviewCard.tsx
     Toolbar.tsx
     DecisionConfidenceBadge.tsx
+    HandoffBanner.tsx
   features/preview/
     PreviewScreen.tsx
     EditDialog.tsx
@@ -52,7 +53,8 @@ interface QueueState {
   pending: ApplicationCandidateSummary[];
   escalated: ApplicationCandidateSummary[];
   decisions: SubmissionDecision[];
-  mode: "review" | "auto_review" | "auto_submit";
+  mode: "review" | "ai_autofill" | "auto_review" | "auto_submit";
+  handoffPending: ApplicationCandidateSummary[];
 }
 
 export const usePreview = create<PreviewState & QueueState>((set) => ({
@@ -60,6 +62,7 @@ export const usePreview = create<PreviewState & QueueState>((set) => ({
   pending: [],
   escalated: [],
   decisions: [],
+  handoffPending: [],
   mode: "review",
   set: (p) => set(p),
 }));
@@ -84,8 +87,9 @@ export async function fetchQueue(runId: string) {
 ```
 
 ## Key Views
-- **PreviewScreen:** remains the focused, single-candidate review with AI suggestion badges and keyboard shortcuts.
+- **PreviewScreen:** remains the focused, single-candidate review with AI suggestion badges, assisted submit banners, and keyboard shortcuts.
 - **QueuePanel:** collapsible side drawer listing pending, escalated, and recently decided items; supports filters (`needs review`, `auto submitted`).
+- **HandoffBanner:** inline component that surfaces `handoff_pending` candidates with “Resume in Browser” CTA, live status, and confirmation buttons.
 - **AutoRunDashboard:** provides run-level telemetry (decisions per minute, AI confidence histogram) for unattended sessions; enables manual overrides mid-run.
 
 All views are driven by the shared Zustand store so human reviewers and observers see real-time queue updates regardless of mode.

@@ -16,7 +16,7 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
     "id": { "type": "string" },
     "startedAt": { "type": "string", "format": "date-time" },
     "profileId": { "type": "string" },
-    "mode": { "type": "string", "enum": ["review", "auto_review", "auto_submit"] },
+    "mode": { "type": "string", "enum": ["review", "ai_autofill", "auto_review", "auto_submit"] },
     "status": { "type": "string", "enum": ["pending", "review", "auto_pending", "submitting", "submitted", "error", "aborted", "duplicate"] },
     "posting": {
       "type": "object",
@@ -38,6 +38,16 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
         "approved": { "type": "boolean" },
         "dryRun": { "type": "boolean" },
         "suggestedDecision": { "$ref": "#/$defs/SubmissionDecision" }
+      }
+    },
+    "autofill": {
+      "type": "object",
+      "properties": {
+        "attempted": { "type": "boolean" },
+        "blockedReason": { "type": "string", "enum": ["captcha", "mfa", "unknown_form_change"], "nullable": true },
+        "handoffSnapshotPath": { "type": "string", "nullable": true },
+        "manualAttempts": { "type": "integer", "minimum": 0, "nullable": true },
+        "lastLaunchedAt": { "type": "string", "format": "date-time", "nullable": true }
       }
     },
     "submission": {
@@ -109,7 +119,7 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
       "type": "object",
       "required": ["mode", "pending", "decided", "escalated", "lastUpdated"],
       "properties": {
-        "mode": { "type": "string", "enum": ["review", "auto_review", "auto_submit"] },
+        "mode": { "type": "string", "enum": ["review", "ai_autofill", "auto_review", "auto_submit"] },
         "pending": {
           "type": "array",
           "items": { "$ref": "#/$defs/ApplicationCandidateSummary" }
@@ -151,7 +161,7 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
         "discoveredAt": { "type": "string", "format": "date-time" },
         "state": {
           "type": "string",
-          "enum": ["discovered", "planned", "awaiting_decision", "decided", "submitted", "shelved"]
+          "enum": ["discovered", "planned", "awaiting_decision", "handoff_pending", "decided", "submitted", "shelved"]
         },
         "lastDecisionId": { "type": "string" },
         "assignedMode": { "type": "string", "enum": ["human", "ai"] },
@@ -178,10 +188,13 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
     "jobTitle": { "type": "string", "nullable": true },
     "company": { "type": "string", "nullable": true },
     "location": { "type": "string", "nullable": true },
-    "source": { "type": "string", "enum": ["simplyhired"] },
+    "source": { "type": "string", "enum": ["simplyhired", "lever_google"] },
     "fingerprint": { "type": "string" },
-    "mode": { "type": "string", "enum": ["review", "auto_review", "auto_submit"] },
-    "status": { "type": "string", "enum": ["submitted", "failed", "aborted", "skipped", "duplicate", "error", "auto_review_pending"] },
+    "mode": { "type": "string", "enum": ["review", "ai_autofill", "auto_review", "auto_submit"] },
+    "automationMode": { "type": "string", "enum": ["review", "ai_autofill", "auto_review", "auto_submit"], "nullable": true },
+    "autoSubmitOutcome": { "type": "string", "enum": ["success", "blocked", "assisted_success"], "nullable": true },
+    "blockedReason": { "type": "string", "enum": ["captcha", "mfa", "unknown_form_change"], "nullable": true },
+    "status": { "type": "string", "enum": ["submitted", "assisted_submitted", "failed", "aborted", "skipped", "duplicate", "error", "auto_review_pending"] },
     "confirmation": { "type": "string", "nullable": true },
     "error": { "type": "string", "nullable": true },
     "runPath": { "type": "string", "nullable": true },
@@ -194,9 +207,11 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
         "approved": { "type": "integer" },
         "escalated": { "type": "integer" },
         "autoSubmitted": { "type": "integer" },
+        "assistedSubmissions": { "type": "integer", "nullable": true },
         "averageConfidence": { "type": "number" }
       }
     },
+    "autofillDemoCompleted": { "type": "boolean", "nullable": true },
     "decisions": {
       "type": "object",
       "nullable": true,

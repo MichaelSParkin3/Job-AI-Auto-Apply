@@ -1,9 +1,9 @@
-# Epic 5 — AI Decision Engine & Advisory Mode
+# Epic 6 — AI Decision Engine & Advisory Mode
 
 ## Expanded Goal
-Deliver the AI-assisted MVP by wiring the LLM decision engine into the queue from Epic 4. The system should generate structured recommendations with confidence scores, expose rationale summaries to reviewers, and gracefully fall back when confidence is low. Humans remain the final approvers; no auto submission occurs in this epic.
+Deliver the AI-assisted MVP by wiring the LLM decision engine into the queue from Epic 4 and the autonomous fill groundwork in Epic 5. The system should generate structured recommendations with confidence scores, expose rationale summaries to reviewers, and gracefully fall back when confidence is low. Humans remain the final approvers; no auto submission occurs in this epic.
 
-## Story 5.1 — Prompt Assembly & Context Gathering
+## Story 6.1 — Prompt Assembly & Context Gathering
 As a developer,
 I want a reusable prompt builder that pulls from artifacts and profiles,
 so that AI decisions have consistent, auditable inputs.
@@ -14,7 +14,7 @@ Acceptance Criteria
 3. Support configurable model + temperature per profile (`profiles/<id>.yaml` `automation` block).
 4. Unit tests verify deterministic prompt structure given fixture data.
 
-## Story 5.2 — LLM Decision Engine Implementation
+## Story 6.2 — LLM Decision Engine Implementation
 As an operator,
 I want AI-suggested decisions with confidence scores,
 so that I can approve routine applications quickly while reviewing the rationale.
@@ -26,7 +26,7 @@ Acceptance Criteria
 4. Dry-run mode skips network call and returns stub suggestion for testing.
 5. Integration test stubs model responses to cover approve/abort/edit/needs_review paths.
 
-## Story 5.3 — Preview UI AI Insight Panel
+## Story 6.3 — Preview UI AI Insight Panel
 As a reviewer,
 I want to see clear AI recommendations with rationale,
 so that I can accept or modify them quickly.
@@ -38,7 +38,7 @@ Acceptance Criteria
 4. UI indicates when AI timed out or failed; provides quick “Re-run AI” action.
 5. Frontend tests verify state transitions, badge rendering, and override telemetry payloads.
 
-## Story 5.4 — Queue Prioritization & Escalation Rules
+## Story 6.4 — Queue Prioritization & Escalation Rules
 As a reviewer,
 I want AI-sorted queues that surface the easiest wins first,
 so that I can maximize throughput when trusting the suggestions.
@@ -50,7 +50,7 @@ Acceptance Criteria
 4. Telemetry captures per-run stats (AI approvals accepted vs overridden) for later analytics.
 5. Tests assert ordering logic using mixed-confidence fixture responses.
 
-## Story 5.5 — Guardrails & Rate Limits
+## Story 6.5 — Guardrails & Rate Limits
 As a compliance stakeholder,
 I want guardrails around AI usage,
 so that the system remains safe and transparent.
@@ -62,5 +62,5 @@ Acceptance Criteria
 4. Logs store hashed rationale and model metadata (`model`, `latency_ms`, `tokens_used`) for auditing.
 5. Unit tests cover opt-in enforcement and rate-limit fallback.
 
-### Rationale (Epic 5)
-This epic completes the AI-assisted MVP. Reviewers get tangible value—ranked queues, rationale summaries, single-click approvals—while retaining final control. The structured data it produces also powers confidence analytics and paves the way for the auto-submit work in Epic 6.
+### Rationale (Epic 6)
+This epic completes the AI-assisted MVP. Reviewers get tangible value—ranked queues, rationale summaries, single-click approvals—while retaining final control. The structured data it produces also powers confidence analytics and paves the way for the auto-submit work in Epic 7.

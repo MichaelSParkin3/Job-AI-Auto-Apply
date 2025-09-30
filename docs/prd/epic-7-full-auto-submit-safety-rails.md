@@ -1,9 +1,9 @@
-# Epic 6 — Full Auto Submit & Safety Rails
+# Epic 7 — Full Auto Submit & Safety Rails
 
 ## Expanded Goal
-Enable trusted profiles to run in unattended, fully automated mode. When confidence thresholds are met, the system should submit immediately, monitor for success/failure, and fall back to human review if anything looks risky. Guardrails (kill switches, confidence floors, notification hooks) must be in place before auto submission is allowed.
+Enable trusted profiles to run in unattended, fully automated mode. Building on Epic 5’s autonomous fill and Epic 6’s decision engine, the system should submit immediately when confidence thresholds are met, monitor for success/failure, and fall back to human review if anything looks risky. Guardrails (kill switches, confidence floors, notification hooks) must be in place before auto submission is allowed.
 
-## Story 6.1 — Auto Submit Execution Path
+## Story 7.1 — Auto Submit Execution Path
 As an operator,
 I want the CLI to submit automatically when AI confidence is high,
 so that I can run unattended batches for well-understood profiles.
@@ -15,7 +15,7 @@ Acceptance Criteria
 4. Dry-run mode logs what would have happened without clicking submit.
 5. Integration tests simulate success and failure flows, ensuring fallbacks fire.
 
-## Story 6.2 — Confidence Policies & Kill Switches
+## Story 7.2 — Confidence Policies & Kill Switches
 As a compliance stakeholder,
 I want explicit policies governing when auto submit is allowed,
 so that the system errs on the side of safety.
@@ -27,7 +27,7 @@ Acceptance Criteria
 4. Provide `apply disable-auto-submit` command that rewrites profile config to disable auto.
 5. Unit tests cover threshold enforcement and failure counter logic.
 
-## Story 6.3 — Notifications & Run Summaries
+## Story 7.3 — Notifications & Run Summaries
 As a user,
 I want to know what happened during unattended runs,
 so that I can review and intervene quickly.
@@ -39,7 +39,7 @@ Acceptance Criteria
 4. Preview UI shows real-time progress bar + ETA when in auto submit mode.
 5. Tests verify summary formatting and notification toggles.
 
-## Story 6.4 — Mid-Run Intervention Tools
+## Story 7.4 — Mid-Run Intervention Tools
 As a reviewer,
 I want to pause or reclaim auto mode candidates mid-run,
 so that I can intervene if something looks off.
@@ -51,7 +51,7 @@ Acceptance Criteria
 4. Resume replays pending approvals in queue order, respecting fresh confidence checks.
 5. Integration tests simulate pause/resume sequences with queued candidates.
 
-## Story 6.5 — Observability & Audit Enhancements
+## Story 7.5 — Observability & Audit Enhancements
 As an auditor,
 I want deep visibility into auto submit behaviour,
 so that I can trust the system over time.
@@ -63,5 +63,5 @@ Acceptance Criteria
 4. Provide `scripts/report_auto_confidence.py` to aggregate confidence distributions over time.
 5. Regression tests ensure telemetry payloads respect redaction rules.
 
-### Rationale (Epic 6)
-Full auto unlocks the second stage of the autonomy roadmap. By codifying strict policies, pause/resume tooling, and rich telemetry, we can expand beyond human-assisted runs without sacrificing safety or auditability.
+### Rationale (Epic 7)
+Full auto unlocks the third stage of the autonomy roadmap. By codifying strict policies, pause/resume tooling, and rich telemetry, we can expand beyond AI-assisted runs without sacrificing safety or auditability.

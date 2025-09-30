@@ -253,3 +253,51 @@ components:
 ```
 
 ---
+  /api/run/{id}/handoff/{candidateId}/launch:
+    post:
+      summary: Relaunch Browser-Use with saved handoff snapshot
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: candidateId
+          required: true
+          schema: { type: string }
+      responses:
+        '202':
+          description: Launch accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  launchedAt: { type: string, format: date-time }
+                  snapshotPath: { type: string }
+  /api/queue/{id}/handoff-confirmation:
+    post:
+      summary: Record outcome of assisted submit
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidateId, outcome]
+              properties:
+                candidateId: { type: string }
+                outcome: { type: string, enum: [success, still_blocked] }
+                blockedReason: { type: string, enum: [captcha, mfa, unknown_form_change], nullable: true }
+      responses:
+        '200':
+          description: Queue snapshot reflecting outcome
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewQueueSnapshot'
