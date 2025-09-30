@@ -83,6 +83,7 @@ class ProfileBinding:
     qa_overrides: Dict[str, str]
     model_overrides: Dict[str, Any]
     browser_overrides: Dict[str, Any]
+    plan_overrides: Dict[str, Any]
     session_backups_enabled: bool | None
     session_backups_retention: int | None
     resume_exists: bool
@@ -109,6 +110,7 @@ class ProfileBinding:
             "qa_overrides": dict(self.qa_overrides),
             "model_overrides": dict(self.model_overrides),
             "browser": dict(self.browser_overrides),
+            "plan": dict(self.plan_overrides),
             "session_backups": {
                 "enabled": self.session_backups_enabled,
                 "retention": self.session_backups_retention,
@@ -129,6 +131,7 @@ class ProfileBinding:
             "qaOverrideKeys": sorted(self.qa_overrides.keys()),
             "model": self.model_overrides.get("llm"),
             "browser": dict(self.browser_overrides),
+            "plan": dict(self.plan_overrides),
             "sessionBackups": {
                 "enabled": self.session_backups_enabled,
                 "retention": self.session_backups_retention,
@@ -162,6 +165,7 @@ class ProfileBinding:
             qa_overrides=dict(profile.qa_overrides),
             model_overrides=dict(profile.model_overrides),
             browser_overrides=profile.resolved_browser_overrides(),
+            plan_overrides=profile.resolved_plan_overrides(),
             session_backups_enabled=profile.session_backups.enabled
             if profile.session_backups
             else None,
@@ -186,6 +190,7 @@ class ProfileBinding:
             qa_overrides={},
             model_overrides={},
             browser_overrides={},
+            plan_overrides={},
             session_backups_enabled=None,
             session_backups_retention=None,
             resume_exists=resume_path.exists(),
@@ -352,6 +357,31 @@ class ProfileConfig(BaseModel):
             return value
 
     search: SearchConfig | None = Field(default=None, alias="search")
+    class PlanOverridesConfig(BaseModel):
+        browser_discovery: bool | None = Field(
+            default=None,
+            alias="browser_discovery",
+            description="Enable Browser-Use discovery for planning",
+        )
+        programmable_search: bool | None = Field(
+            default=None,
+            alias="programmable_search",
+            description="Prefer Google Programmable Search when credentials present",
+        )
+        google_cse_key: str | None = Field(
+            default=None,
+            alias="google_cse_key",
+            description="API key for Google Custom Search",
+        )
+        google_cse_cx: str | None = Field(
+            default=None,
+            alias="google_cse_cx",
+            description="Programmable Search engine identifier",
+        )
+
+        model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    plan: PlanOverridesConfig | None = Field(default=None, alias="plan")
     browser: BrowserOverridesConfig | None = Field(
         default=None,
         alias="browser",
@@ -447,6 +477,22 @@ class ProfileConfig(BaseModel):
                 overrides["pacing"] = pacing
         return overrides
 
+    def resolved_plan_overrides(self) -> Dict[str, Any]:
+        """Return plan discovery overrides for CLI/config merging."""
+
+        if not self.plan:
+            return {}
+        overrides: Dict[str, Any] = {}
+        if self.plan.browser_discovery is not None:
+            overrides["browser_discovery"] = bool(self.plan.browser_discovery)
+        if self.plan.programmable_search is not None:
+            overrides["programmable_search"] = bool(self.plan.programmable_search)
+        if self.plan.google_cse_key:
+            overrides["google_cse_key"] = self.plan.google_cse_key.strip()
+        if self.plan.google_cse_cx:
+            overrides["google_cse_cx"] = self.plan.google_cse_cx.strip()
+        return overrides
+
 
 @dataclass
 class ProfileValidationResult:
@@ -507,6 +553,11 @@ PROFILE_TEMPLATE = (
     "  terms: ['front end']\n"
     "  location: 'remote us'\n"
     "  time_window: d\n"
+    "plan:\n"
+    "  browser_discovery: false\n"
+    "  programmable_search: false\n"
+    "  google_cse_key: null\n"
+    "  google_cse_cx: null\n"
 )
 
 

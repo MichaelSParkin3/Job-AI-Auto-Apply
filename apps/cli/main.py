@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 from urllib.error import URLError
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 import typer
@@ -187,6 +188,9 @@ def _lever_guardrail_domains() -> list[str]:
     ]
 
 
+PLAN_GOOGLE_DOMAINS = ["www.google.com", "*.google.com", "consent.google.com"]
+
+
 def _iso_now() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
 
@@ -268,6 +272,303 @@ def _plan_candidates(
     return results
 
 
+def _normalize_lever_href(url: str) -> tuple[str, str] | None:
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        parsed = parsed._replace(scheme="https")
+    host = parsed.netloc.lower()
+    if not host:
+        return None
+    if not host.endswith("jobs.lever.co"):
+        return None
+    cleaned = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+    normalized_path = parsed.path.rstrip("/")
+    is_apply = normalized_path.endswith("/apply") or "/apply/" in normalized_path
+    mode = "apply_direct" if is_apply else "job_page"
+    return cleaned, mode
+
+
+def _fetch_cse_json(url: str) -> Mapping[str, Any] | None:
+    try:
+        request = Request(url)
+        with urlopen(request, timeout=20) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            payload = response.read().decode(charset, errors="replace")
+            return json.loads(payload)
+    except URLError as error:
+        log_event(
+            {
+                "level": "warning",
+                "event": "lever.plan.cse_failed",
+                "message": "Programmable Search request failed.",
+                "url": url,
+                "error": getattr(error, "reason", str(error)),
+            }
+        )
+        return None
+
+
+def _discover_candidates_with_cse(
+    *,
+    plan_payload: Mapping[str, Any],
+    api_key: str,
+    cx: str,
+    time_window: str,
+    pages: int,
+    fetch_json: Callable[[str], Mapping[str, Any] | None] | None = None,
+) -> tuple[list[LeverSerpResult], dict[str, Any]]:
+    fetcher = fetch_json or _fetch_cse_json
+    plan_map = plan_payload.get("plan") if isinstance(plan_payload.get("plan"), Mapping) else {}
+    base_url = ""
+    if isinstance(plan_map, Mapping):
+        base_value = plan_map.get("baseUrl")
+        if isinstance(base_value, str):
+            base_url = base_value
+    if not base_url:
+        search_map = plan_payload.get("search") if isinstance(plan_payload.get("search"), Mapping) else {}
+        terms = search_map.get("terms") if isinstance(search_map, Mapping) else []
+        location = search_map.get("location") if isinstance(search_map, Mapping) else None
+        terms_list = [str(term) for term in terms] if isinstance(terms, (list, tuple)) else []
+        discovery_plan = LeverGoogleDiscovery.plan(terms_list, location, time_window=time_window, pages=1)
+        base_url = discovery_plan.base_url
+    parsed = urlparse(base_url)
+    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    q_param = query_params.get("q", "")
+    tbs = query_params.get("tbs", "")
+    time_map = {
+        "qdr:h": "d1",
+        "qdr:d": "d1",
+        "qdr:w": "w1",
+        "qdr:m": "m1",
+        "qdr:y": "y1",
+    }
+    window_map = {"h": "d1", "d": "d1", "w": "w1", "m": "m1", "y": "y1"}
+    date_restrict = time_map.get(tbs) or window_map.get(time_window)
+    results: list[LeverSerpResult] = []
+    seen: set[str] = set()
+    api_calls = 0
+    max_pages = max(1, pages)
+    for index in range(max_pages):
+        params = {
+            "key": api_key,
+            "cx": cx,
+            "q": q_param,
+            "num": 10,
+            "start": index * 10 + 1,
+        }
+        if date_restrict:
+            params["dateRestrict"] = date_restrict
+        request_url = f"https://www.googleapis.com/customsearch/v1?{urlencode(params)}"
+        log_event(
+            {
+                "event": "lever.plan.cse_request",
+                "page": index + 1,
+                "url": request_url,
+            }
+        )
+        payload = fetcher(request_url)
+        if not payload:
+            continue
+        api_calls += 1
+        items = payload.get("items") if isinstance(payload, Mapping) else None
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            link = str(item.get("link") or "").strip()
+            if not link:
+                continue
+            normalized = _normalize_lever_href(link)
+            if not normalized:
+                continue
+            href, mode = normalized
+            if href in seen:
+                continue
+            seen.add(href)
+            title = str(item.get("title") or href)
+            results.append(LeverSerpResult(title=title, href=href, mode=mode))
+        if len(items) < 10:
+            break
+    log_event(
+        {
+            "event": "lever.plan.cse_completed",
+            "results": len(results),
+            "apiCalls": api_calls,
+        }
+    )
+    return results, {"mode": "programmable_search", "apiCalls": api_calls}
+
+
+def _discover_candidates_with_browser(
+    *,
+    plan_payload: Mapping[str, Any],
+    settings: Settings,
+    profile_id: str,
+    binding: ProfileBinding | None,
+    base: Path,
+) -> tuple[list[LeverSerpResult], dict[str, Any]]:
+    binding = binding or ProfileBinding.demo(base, profile_id=profile_id)
+    binding.user_data_dir.mkdir(parents=True, exist_ok=True)
+    guardrail_domains: list[str]
+    overrides_domains = binding.browser_overrides.get("allowed_domains") if binding.browser_overrides else None
+    if isinstance(overrides_domains, (list, tuple)) and overrides_domains:
+        guardrail_domains = [str(domain).strip() for domain in overrides_domains if str(domain).strip()]
+    else:
+        guardrail_domains = [str(domain).strip() for domain in settings.browser_allowed_domains]
+    for domain in _lever_guardrail_domains():
+        if domain not in guardrail_domains:
+            guardrail_domains.append(domain)
+    for domain in PLAN_GOOGLE_DOMAINS:
+        if domain not in guardrail_domains:
+            guardrail_domains.append(domain)
+    wait_range = tuple(int(value) for value in settings.browser_pacing_wait_jitter_ms)
+    think_range = tuple(float(value) for value in settings.browser_pacing_think_time_range_s)
+    browser_model_override = (
+        binding.browser_overrides.get("model") if binding.browser_overrides else None
+    )
+    profile_model = binding.model_overrides.get("llm") if binding.model_overrides else None
+    effective_model = (
+        browser_model_override
+        or profile_model
+        or settings.OPENROUTER_MODEL
+        or settings.browser_model
+    )
+    if not effective_model:
+        raise ApiError(
+            code="plan.browser.model_missing",
+            message="No Browser-Use model configured for plan discovery.",
+            details={"profileId": profile_id},
+        )
+    search_map = plan_payload.get("search") if isinstance(plan_payload.get("search"), Mapping) else {}
+    source = "lever-google"
+    if isinstance(search_map, Mapping) and isinstance(search_map.get("source"), str):
+        source = str(search_map.get("source"))
+    launch_config = BrowserLaunchConfig(
+        profile_id=profile_id,
+        user_data_dir=binding.user_data_dir,
+        model=effective_model,
+        viewport_width=settings.browser_viewport_width,
+        viewport_height=settings.browser_viewport_height,
+        locale=settings.browser_locale,
+        timezone=settings.browser_timezone,
+        chrome_path=settings.chrome_path,
+        guardrail_domains=tuple(guardrail_domains),
+        wait_jitter_ms=wait_range,
+        think_time_range_s=think_range,
+        profile_metadata={"mode": "plan", "source": source},
+        profile_binding=binding.telemetry_payload(),
+    )
+    run_store = RunStore(base=base)
+    run_record = run_store.start_lever_plan_discovery(
+        profile_id=profile_id,
+        source=source,
+        plan_payload=plan_payload,
+        guardrails=guardrail_domains,
+        discovery_mode="browser",
+        profile_binding=binding.cli_payload(),
+    )
+    plan_dir = run_record.run_dir / "plan"
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    plan_map = plan_payload.get("plan") if isinstance(plan_payload.get("plan"), Mapping) else {}
+    urls: list[str] = []
+    if isinstance(plan_map, Mapping):
+        raw_urls = plan_map.get("urls")
+        if isinstance(raw_urls, (list, tuple)):
+            urls = [str(item) for item in raw_urls if str(item).strip()]
+    log_event(
+        {
+            "event": "lever.plan.browser.start",
+            "runId": run_record.id,
+            "urls": len(urls),
+            "guardrails": guardrail_domains,
+        }
+    )
+    controller = BrowserUseController(launch_config)
+    artifacts: list[dict[str, Any]] = []
+    results: list[LeverSerpResult] = []
+    seen: set[str] = set()
+    try:
+        for index, url in enumerate(urls, start=1):
+            artifact_path = plan_dir / f"serp-page-{index:02}.html"
+            log_event(
+                {
+                    "event": "lever.plan.browser.navigate",
+                    "page": index,
+                    "url": url,
+                    "runId": run_record.id,
+                }
+            )
+            navigation = controller.open_url(url)
+            if navigation.status != BrowserActionStatus.OK:
+                log_event(
+                    {
+                        "level": "warning",
+                        "event": "lever.plan.browser.navigation_failed",
+                        "page": index,
+                        "url": url,
+                        "details": navigation.details,
+                        "runId": run_record.id,
+                    }
+                )
+                continue
+            controller.wait_for_idle(timeout=12.0)
+            page_html = controller.get_page_html()
+            html = ""
+            if isinstance(page_html.details, Mapping):
+                html = str(page_html.details.get("html") or "")
+            if not html.strip():
+                log_event(
+                    {
+                        "level": "warning",
+                        "event": "lever.plan.browser.empty_html",
+                        "page": index,
+                        "url": url,
+                        "runId": run_record.id,
+                    }
+                )
+                continue
+            artifact_path.write_text(html, encoding="utf-8")
+            artifacts.append({"path": str(artifact_path), "url": url})
+            for result in LeverGoogleDiscovery.extract_results(html):
+                if result.href in seen:
+                    continue
+                seen.add(result.href)
+                results.append(result)
+    finally:
+        try:
+            controller.close()
+        except Exception:
+            pass
+        run_store.record_plan_discovery(
+            run_record,
+            {
+                "guardrails": guardrail_domains,
+                "artifacts": artifacts,
+                "results": [
+                    {"title": r.title, "href": r.href, "mode": r.mode} for r in results
+                ],
+                "mode": "browser",
+                "summary": {"pages": len(artifacts), "results": len(results)},
+            },
+        )
+        log_event(
+            {
+                "event": "lever.plan.browser.completed",
+                "runId": run_record.id,
+                "pages": len(artifacts),
+                "results": len(results),
+            }
+        )
+        set_run_context(None)
+    return results, {
+        "guardrails": guardrail_domains,
+        "artifacts": artifacts,
+        "run_id": run_record.id,
+        "run_dir": str(run_record.run_dir),
+        "mode": "browser",
+        "summary": {"pages": len(artifacts), "results": len(results)},
+    }
 def _queue_upsert(snapshot: dict[str, Any], entry: Mapping[str, Any]) -> None:
     """Insert or update a pending queue entry in-place."""
 
@@ -352,10 +653,41 @@ def apply_plan(
     ),
     pages: int = typer.Option(1, "--pages", min=1, help="Number of SERP pages (10 results each)."),
     profile: Optional[str] = typer.Option(None, "--profile", help="Profile identifier to bind."),
+    browser_discovery: Optional[bool] = typer.Option(
+        None,
+        "--browser-discovery/--no-browser-discovery",
+        help="Use Browser-Use to capture SERP HTML and dedupe Lever results.",
+    ),
+    programmable_search: Optional[bool] = typer.Option(
+        None,
+        "--programmable-search/--no-programmable-search",
+        help="Use Google Programmable Search when credentials are configured.",
+    ),
+    google_cse_key: Optional[str] = typer.Option(
+        None,
+        "--google-cse-key",
+        help="Override Google Custom Search API key for this invocation.",
+    ),
+    google_cse_cx: Optional[str] = typer.Option(
+        None,
+        "--google-cse-cx",
+        help="Override Google Programmable Search engine identifier.",
+    ),
 ):
     """Plan discovery URLs for supported sources (lever-google review flow)."""
 
-    settings = Settings.load(overrides={"active_profile": profile} if profile else None)
+    overrides: dict[str, Any] = {}
+    if profile:
+        overrides["active_profile"] = profile
+    if browser_discovery is not None:
+        overrides["plan.browser_discovery"] = browser_discovery
+    if programmable_search is not None:
+        overrides["plan.programmable_search"] = programmable_search
+    if google_cse_key:
+        overrides["plan.google_cse_key"] = google_cse_key
+    if google_cse_cx:
+        overrides["plan.google_cse_cx"] = google_cse_cx
+    settings = Settings.load(overrides=overrides or None)
     base = get_base_dir()
     service = ProfileService(base=base)
 
@@ -398,6 +730,119 @@ def apply_plan(
         time_window=qdr,
         pages=pages,
     )
+
+    plan_preferences = {
+        "browser_discovery": bool(settings.plan_browser_discovery),
+        "programmable_search": bool(settings.plan_programmable_search),
+        "google_cse_key": settings.plan_google_cse_key,
+        "google_cse_cx": settings.plan_google_cse_cx,
+    }
+    profile_plan_overrides: Mapping[str, Any] = {}
+    if profile_config is not None:
+        profile_plan_overrides = profile_config.resolved_plan_overrides()
+    elif binding is not None and binding.plan_overrides:
+        profile_plan_overrides = binding.plan_overrides
+    if browser_discovery is None and profile_plan_overrides.get("browser_discovery") is not None:
+        plan_preferences["browser_discovery"] = bool(
+            profile_plan_overrides["browser_discovery"]
+        )
+    if programmable_search is None and profile_plan_overrides.get("programmable_search") is not None:
+        plan_preferences["programmable_search"] = bool(
+            profile_plan_overrides["programmable_search"]
+        )
+    if google_cse_key is None and not plan_preferences["google_cse_key"]:
+        if profile_plan_overrides.get("google_cse_key"):
+            plan_preferences["google_cse_key"] = profile_plan_overrides["google_cse_key"]
+    if google_cse_cx is None and not plan_preferences["google_cse_cx"]:
+        if profile_plan_overrides.get("google_cse_cx"):
+            plan_preferences["google_cse_cx"] = profile_plan_overrides["google_cse_cx"]
+
+    use_cse = (
+        plan_preferences["programmable_search"]
+        and bool(plan_preferences["google_cse_key"])
+        and bool(plan_preferences["google_cse_cx"])
+    )
+    if plan_preferences["programmable_search"] and not use_cse:
+        log_event(
+            {
+                "level": "warning",
+                "event": "lever.plan.cse_credentials_missing",
+                "message": "Programmable Search requested but GOOGLE_CSE_KEY/CX are missing; falling back to other discovery mode.",
+            }
+        )
+    use_browser = bool(plan_preferences["browser_discovery"])
+    results: list[LeverSerpResult] = []
+    discovery_metadata: dict[str, Any] = {}
+    discovery_mode = "http"
+    if use_cse:
+        results, discovery_metadata = _discover_candidates_with_cse(
+            plan_payload=payload,
+            api_key=str(plan_preferences["google_cse_key"]),
+            cx=str(plan_preferences["google_cse_cx"]),
+            time_window=qdr,
+            pages=pages,
+        )
+        discovery_mode = "programmable_search"
+    elif use_browser:
+        try:
+            results, discovery_metadata = _discover_candidates_with_browser(
+                plan_payload=payload,
+                settings=settings,
+                profile_id=profile_id,
+                binding=binding,
+                base=base,
+            )
+        except ApiError as error:
+            typer.secho(error.to_json(), fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        except (BrowserUseError, BrowserLaunchError) as error:
+            typer.secho(str(error), fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        discovery_mode = "browser"
+
+    if discovery_metadata.get("guardrails"):
+        payload.setdefault("guardrails", {})["allowed_domains"] = list(
+            discovery_metadata["guardrails"]
+        )
+    plan_section = payload.setdefault("plan", {})
+    if discovery_metadata.get("artifacts"):
+        plan_section["artifacts"] = list(discovery_metadata["artifacts"])
+    if discovery_metadata.get("summary"):
+        summary = plan_section.get("summary", {}) if isinstance(plan_section.get("summary"), Mapping) else {}
+        summary.update(discovery_metadata["summary"])
+        plan_section["summary"] = summary
+    if discovery_metadata.get("mode"):
+        plan_section["discoveryMode"] = discovery_metadata["mode"]
+    if discovery_metadata.get("run_id"):
+        plan_section["runId"] = discovery_metadata["run_id"]
+    if discovery_metadata.get("run_dir"):
+        plan_section["runDir"] = discovery_metadata["run_dir"]
+    if discovery_metadata.get("apiCalls"):
+        summary = plan_section.get("summary", {}) if isinstance(plan_section.get("summary"), Mapping) else {}
+        summary.setdefault("apiCalls", discovery_metadata["apiCalls"])
+        plan_section["summary"] = summary
+    if results:
+        payload["results"] = [
+            {"title": item.title, "href": item.href, "mode": item.mode}
+            for item in results
+        ]
+
+    if discovery_mode == "browser" and discovery_metadata.get("run_dir"):
+        run_dir_path = Path(discovery_metadata["run_dir"])
+        plan_output_path = run_dir_path / "plan" / "plan.json"
+        plan_output_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    if discovery_mode != "http":
+        log_event(
+            {
+                "event": "lever.plan.discovery_completed",
+                "mode": discovery_mode,
+                "results": len(results),
+            }
+        )
+
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 

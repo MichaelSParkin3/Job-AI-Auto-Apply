@@ -1,0 +1,42 @@
+schema: 1
+story: '4.1.6'
+story_title: 'Lever Plan Browser Discovery'
+gate: FAIL
+status_reason: 'pytest apps/cli/tests/test_apply_plan.py aborts on import because apps/cli/profiles.py requires pydantic.ConfigDict, which is unavailable in the current pydantic v1 runtime; Browser-Use and Programmable Search discovery paths remain unverified.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-12-02T00:00:00Z'
+
+top_issues:
+  - id: QA-4.1.6-1
+    severity: high
+    summary: 'Pydantic v1 compatibility gap causes CLI plan tests to crash before execution.'
+    recommendation: 'Provide fallback definitions or pin pydantic>=2 so the plan discovery tests can exercise Browser-Use, HTTP, and Programmable Search flows.'
+
+waiver:
+  active: false
+
+quality_score: 45
+expires: '2025-12-09T00:00:00Z'
+
+evidence:
+  tests_reviewed: 1
+  risks_identified: 1
+  trace:
+    ac_covered: []
+    ac_gaps: [1, 2, 3, 4, 5, 6]
+    notes: 'Test suite aborts during import because ConfigDict is missing from pydantic; artifact persistence, guardrail logging, and discovery enrichment remain untested.'
+
+nfr_validation:
+  _assessed: [reliability, maintainability]
+  reliability:
+    status: FAIL
+    notes: 'Dependency regression blocks exercising Browser-Use run-store persistence and guardrail telemetry.'
+  maintainability:
+    status: WARN
+    notes: 'New CLI dependencies assume pydantic v2 types without compatibility shims, increasing upgrade friction.'
+
+recommendations:
+  immediate:
+    - 'Add a compatibility shim for ConfigDict (or require pydantic>=2) before re-running pytest apps/cli/tests/test_apply_plan.py -q.'
+  future:
+    - 'Backfill CI coverage for plan discovery across Browser-Use and Programmable Search once dependency constraints are resolved.'

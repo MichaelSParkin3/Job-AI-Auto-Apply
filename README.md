@@ -2,7 +2,14 @@
 
 Local-first, review-first automation for job applications. This repo now ships the end-to-end dry-run demo experience: a Typer CLI that boots a FastAPI preview service, serves a React UI, and lets you approve/decline edits before anything is submitted.
 
-Status: Story 3.3 (Profile-driven filling & validation) implemented.
+Status: Story 4.1.6 (Lever plan Browser discovery) implemented.
+
+## What’s New in 4.1.6
+- `python app.py apply plan --source lever-google` can launch Browser-Use with `--browser-discovery` to capture SERP HTML,
+  persist artifacts under `runs/<id>/plan/`, and enrich plan JSON with deduped Lever results.
+- Programmable Search support: use `--programmable-search` together with `GOOGLE_CSE_KEY`/`GOOGLE_CSE_CX` (or CLI overrides)
+  to call Google’s Custom Search API when headless discovery is preferred.
+- Plan guardrails now record Google allowlist domains alongside Lever defaults so run summaries reflect the expanded surface.
 
 ## What’s New in 3.3
 - `python app.py apply open` now replays the persisted SimplyHired `FormFillPlan` instead of re-scraping HTML. The new
@@ -123,8 +130,11 @@ Create `.env.local` at repo root (optional):
 ```env
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=deepseek/deepseek-chat-v3.1:free
+GOOGLE_CSE_KEY=...        # optional: Google Programmable Search API key
+GOOGLE_CSE_CX=...         # optional: Programmable Search engine id
 ```
-The app logs a JSON warning if `.env.local` is missing and continues.
+The app logs a JSON warning if `.env.local` is missing and continues. When Programmable Search credentials are present the CLI
+can use `--programmable-search` to call Google’s Custom Search API without launching Browser-Use.
 
 ### Profiles
 ```bash
@@ -164,6 +174,16 @@ python app.py apply open "https://www.simplyhired.com/search?q=python" \
 The command resolves the Chrome `user_data_dir` to `.local/browser/profiles/<profile>`, honors overrides from `config/config.yaml` or `data/profiles/<id>.yaml`, and returns a JSON payload with the session identifier plus a `profile` object describing the active binding (resume path, QA overrides, guardrails). If the selected profile fails validation or the resume PDF is missing, the CLI exits with `profiles.validation_failed` before launching Chrome. Dry-run mode continues to fall back to the `demo` profile only when no active profile is configured.
 
 After the search readiness check succeeds the CLI now snapshots the resolved session directory to `.local/browser/backups/<profile>/` and records the result under the `backups` key in the JSON response. Restores run automatically when Chrome launch detects a corrupted profile (e.g., missing `Preferences`), retrying exactly once before surfacing an error. Operators can opt out per run with `--session-backups/--no-session-backups` or by setting `browser_session_backups.enabled` in the global/profile config files. Run metadata (`runs/<id>/run.json`) keeps the same `sessionBackup` structure so history tooling can inspect the latest snapshot and any restore attempts.
+
+### Lever Plan Discovery Modes
+- `python app.py apply plan --browser-discovery` launches Browser-Use for each SERP URL in the generated plan, saves the raw HTML
+  under `runs/<id>/plan/serp-page-*.html`, and populates the emitted JSON with unique Lever results. Guardrails expand to include
+  `www.google.com`, `*.google.com`, and `consent.google.com` alongside the existing Lever allowlist.
+- `--programmable-search` prefers Google’s Programmable Search JSON API when `GOOGLE_CSE_KEY`/`GOOGLE_CSE_CX` (or the CLI
+  overrides `--google-cse-key/--google-cse-cx`) are provided. This mode avoids launching Chrome and still emits the enriched
+  `results` array.
+- If both toggles are supplied, Programmable Search takes precedence; omitting both preserves the original headless HTTP fetch
+  behaviour from Story 4.0.
 
 #### Stealth Guardrails & Pacing
 - **Domain allowlist** – navigation is limited to the configured domains (`browser.allowed_domains`). Profile YAML can append additional domains per-identity.

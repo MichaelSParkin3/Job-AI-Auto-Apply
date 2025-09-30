@@ -9,7 +9,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from apps.preview.constants import (
     PLACEHOLDER_NOTES,
@@ -293,6 +293,93 @@ class RunStore:
         )
         return record
 
+    def start_lever_plan_discovery(
+        self,
+        *,
+        profile_id: Optional[str],
+        source: str,
+        plan_payload: Mapping[str, Any],
+        guardrails: Sequence[str],
+        discovery_mode: str,
+        profile_binding: Optional[Dict[str, Any]] = None,
+    ) -> RunRecord:
+        """Create a run directory for Lever plan discovery flows."""
+
+        timestamp = datetime.now(timezone.utc)
+        slug = secrets.token_hex(4)
+        run_id = f"{timestamp:%Y%m%d-%H%M%S}-{slug}"
+        run_dir = self.runs_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        plan_dir = run_dir / "plan"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        logs_path = run_dir / "actions.log"
+        logs_path.touch(exist_ok=True)
+        record = RunRecord(
+            id=run_id,
+            started_at=timestamp,
+            run_dir=run_dir,
+            run_json_path=run_dir / "run.json",
+            logs_path=logs_path,
+            profile_id=profile_id,
+            screenshot_path=None,
+        )
+        plan_map = plan_payload.get("plan") if isinstance(plan_payload.get("plan"), Mapping) else {}
+        plan_urls: Sequence[str] = []
+        plan_pages = None
+        if isinstance(plan_map, Mapping):
+            urls_value = plan_map.get("urls")
+            if isinstance(urls_value, Sequence):
+                plan_urls = [str(url) for url in urls_value]
+            pages_value = plan_map.get("pages")
+            if isinstance(pages_value, (int, float)):
+                plan_pages = int(pages_value)
+        metadata: Dict[str, Any] = {
+            "mode": "plan",
+            "profileLabel": format_profile_label(profile_id),
+            "source": source,
+            "discoveryMode": discovery_mode,
+        }
+        if profile_binding is not None:
+            metadata["profileBinding"] = profile_binding
+        plan_section: Dict[str, Any] = {
+            "source": source,
+            "search": plan_payload.get("search"),
+            "guardrails": list(guardrails),
+            "mode": discovery_mode,
+            "urls": list(plan_urls),
+            "artifacts": [],
+            "results": [],
+        }
+        if plan_pages is not None:
+            plan_section["pages"] = plan_pages
+        if plan_payload.get("notes"):
+            plan_section["notes"] = list(plan_payload.get("notes", []))
+        if plan_payload.get("profile"):
+            plan_section["profile"] = plan_payload.get("profile")
+        payload: Dict[str, Any] = {
+            "id": record.id,
+            "startedAt": record.started_at.isoformat().replace("+00:00", "Z"),
+            "status": "plan_pending",
+            "profileId": profile_id,
+            "artifactsDir": str(run_dir),
+            "logsPath": str(logs_path),
+            "metadata": metadata,
+            "plan": plan_section,
+        }
+        self._write_run_json(record.run_json_path, payload)
+        set_run_context(
+            RunContext(
+                id=record.id,
+                started_at=record.started_at,
+                run_dir=record.run_dir,
+                run_json_path=record.run_json_path,
+                logs_path=record.logs_path,
+                profile_id=record.profile_id,
+                profile_binding=profile_binding,
+            )
+        )
+        return record
+
     # region Demo mutation helpers
 
     def bootstrap_demo_preview(
@@ -406,6 +493,31 @@ class RunStore:
         data["status"] = "quick_apply_discovery"
         self._write_run_json(record.run_json_path, data)
         return data
+
+    def record_plan_discovery(
+        self, record: RunRecord, discovery_payload: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        """Persist plan discovery metadata and results for the given run."""
+
+        data = self._load_run_json(record.run_json_path)
+        plan_section = data.setdefault("plan", {})
+        if discovery_payload.get("guardrails") is not None:
+            plan_section["guardrails"] = list(discovery_payload.get("guardrails", []))
+        if discovery_payload.get("artifacts") is not None:
+            plan_section["artifacts"] = list(discovery_payload.get("artifacts", []))
+        if discovery_payload.get("results") is not None:
+            plan_section["results"] = list(discovery_payload.get("results", []))
+        if discovery_payload.get("mode"):
+            plan_section["mode"] = discovery_payload["mode"]
+        if discovery_payload.get("summary"):
+            plan_section["summary"] = discovery_payload["summary"]
+        data["plan"] = plan_section
+        if discovery_payload.get("metadata"):
+            metadata = data.setdefault("metadata", {})
+            metadata.update(discovery_payload["metadata"])
+        data["status"] = discovery_payload.get("status", "plan_completed")
+        self._write_run_json(record.run_json_path, data)
+        return plan_section
 
     def record_form_plan(
         self, record: RunRecord, form_plan_payload: Dict[str, Any]

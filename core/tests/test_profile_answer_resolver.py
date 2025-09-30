@@ -50,6 +50,7 @@ def _build_binding() -> ProfileBinding:
         qa_overrides={"customQuestion": "N/A"},
         model_overrides={},
         browser_overrides={},
+        plan_overrides={},
         session_backups_enabled=None,
         session_backups_retention=None,
         resume_exists=True,

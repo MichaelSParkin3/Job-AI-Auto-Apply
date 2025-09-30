@@ -57,6 +57,12 @@ Acceptance Criteria
 4. A toggle (`--browser-discovery/--no-browser-discovery`, default configurable via profile/global config) chooses between Browser-Use discovery and the existing HTTP fetch so CI and scripted flows remain headless by default.
 5. Automated tests mock the Browser-Use controller to cover both code paths, verifying JSON output, guardrail payloads, and artifact paths without launching real Chrome.
 
+**Implementation Notes**
+- CLI settings now accept `plan.browser_discovery`, `plan.programmable_search`, `plan.google_cse_key`, and `plan.google_cse_cx`; profile YAML mirrors these fields so operators can opt into discovery modes per identity.
+- `python app.py apply plan --browser-discovery` launches Browser-Use with expanded guardrails (`www.google.com`, `*.google.com`, `consent.google.com`) and writes SERP HTML to `runs/<id>/plan/serp-page-*.html`.
+- `--programmable-search` (with `GOOGLE_CSE_KEY`/`GOOGLE_CSE_CX` or CLI overrides) calls Google’s Programmable Search API and emits the same deduped `results` payload without starting Chrome; when both flags are set the API path takes precedence.
+- New unit tests (`apps/cli/tests/test_apply_plan.py`) cover Browser-Use and Programmable Search paths with mocked clients; README documents the new toggles and environment variables.
+
 ## Story 4.2 â€” Review Queue Persistence & APIs
 As an operator,
 I want the automation to queue multiple application candidates with deterministic state transitions,

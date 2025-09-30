@@ -41,6 +41,12 @@ DEFAULTS = {
     "search_ready_selector_override": None,
     "search_ready_min_cards": 10,
     "quick_apply_selector_override": None,
+    "plan": {
+        "browser_discovery": False,
+        "programmable_search": False,
+        "google_cse_key": None,
+        "google_cse_cx": None,
+    },
 }
 
 
@@ -156,6 +162,10 @@ def load_env(base: Path | None = None) -> Dict[str, Any]:
         "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY"),
         "OPENROUTER_MODEL": os.environ.get("OPENROUTER_MODEL"),
     }
+    if google_cse_key := os.environ.get("GOOGLE_CSE_KEY"):
+        env_config["plan.google_cse_key"] = google_cse_key
+    if google_cse_cx := os.environ.get("GOOGLE_CSE_CX"):
+        env_config["plan.google_cse_cx"] = google_cse_cx
     # Allow optional environment overrides for demo helpers
     if chrome_path := os.environ.get("JAA_CHROME_PATH"):
         env_config["chrome_path"] = chrome_path
@@ -246,6 +256,10 @@ class Settings:
     search_ready_selector_override: str | None = DEFAULTS["search_ready_selector_override"]
     search_ready_min_cards: int = DEFAULTS["search_ready_min_cards"]
     quick_apply_selector_override: str | None = DEFAULTS["quick_apply_selector_override"]
+    plan_browser_discovery: bool = False
+    plan_programmable_search: bool = False
+    plan_google_cse_key: str | None = None
+    plan_google_cse_cx: str | None = None
     # Derived/env
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
@@ -292,6 +306,34 @@ class Settings:
         data.update({k: v for k, v in env.items() if v is not None})
         if marker_profile := load_active_profile(base):
             data["active_profile"] = marker_profile
+        plan_dict = data.pop("plan", {}) or {}
+
+        def _assign_plan_option(target: Dict[str, Any], key: str, value: Any) -> None:
+            if value is None:
+                return
+            if key == "browser_discovery":
+                target["plan_browser_discovery"] = _to_bool(value)
+            elif key == "programmable_search":
+                target["plan_programmable_search"] = _to_bool(value)
+            elif key == "google_cse_key":
+                target["plan_google_cse_key"] = str(value)
+            elif key == "google_cse_cx":
+                target["plan_google_cse_cx"] = str(value)
+
+        if isinstance(plan_dict, dict):
+            for key, value in plan_dict.items():
+                _assign_plan_option(data, str(key), value)
+        for dotted_key in [key for key in list(data.keys()) if key.startswith("plan.")]:
+            _, subkey = dotted_key.split(".", 1)
+            _assign_plan_option(data, subkey, data.pop(dotted_key))
+        if "plan_browser_discovery" in data:
+            _assign_plan_option(data, "browser_discovery", data.pop("plan_browser_discovery"))
+        if "plan_programmable_search" in data:
+            _assign_plan_option(data, "programmable_search", data.pop("plan_programmable_search"))
+        if "plan_google_cse_key" in data:
+            _assign_plan_option(data, "google_cse_key", data.pop("plan_google_cse_key"))
+        if "plan_google_cse_cx" in data:
+            _assign_plan_option(data, "google_cse_cx", data.pop("plan_google_cse_cx"))
         # Allow nested browser config in YAML/env overrides (browser.* keys)
         browser_dict = data.pop("browser", {}) or {}
         if isinstance(browser_dict, dict):
@@ -404,6 +446,16 @@ class Settings:
                         processed["browser_session_backups_enabled"] = _to_bool(value)
                     elif subkey == "retention":
                         processed["browser_session_backups_retention"] = int(value)
+                elif key.startswith("plan."):
+                    _, subkey = key.split(".", 1)
+                    if subkey == "browser_discovery":
+                        processed["plan_browser_discovery"] = _to_bool(value)
+                    elif subkey == "programmable_search":
+                        processed["plan_programmable_search"] = _to_bool(value)
+                    elif subkey == "google_cse_key":
+                        processed["plan_google_cse_key"] = value
+                    elif subkey == "google_cse_cx":
+                        processed["plan_google_cse_cx"] = value
                 else:
                     processed[key] = value
             data.update(processed)
@@ -463,6 +515,22 @@ class Settings:
                 )
             ),
         )
+        data["plan_browser_discovery"] = _to_bool(
+            data.get("plan_browser_discovery", False)
+        )
+        data["plan_programmable_search"] = _to_bool(
+            data.get("plan_programmable_search", False)
+        )
+        if data.get("plan_google_cse_key"):
+            key_value = str(data["plan_google_cse_key"]).strip()
+            data["plan_google_cse_key"] = key_value or None
+        else:
+            data["plan_google_cse_key"] = None
+        if data.get("plan_google_cse_cx"):
+            cx_value = str(data["plan_google_cse_cx"]).strip()
+            data["plan_google_cse_cx"] = cx_value or None
+        else:
+            data["plan_google_cse_cx"] = None
         return cls(**data)
 
     def to_json(self) -> str:
