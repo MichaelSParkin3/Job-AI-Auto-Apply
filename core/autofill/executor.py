@@ -204,7 +204,12 @@ class AutofillExecutor:
                 continue
             if self._dry_run:
                 fields.append(
-                    self._skip_field(plan, intent, reason="dry_run")
+                    self._skip_field(
+                        plan,
+                        intent,
+                        reason="dry_run",
+                        value=value,
+                    )
                 )
                 continue
             execution = self._execute_field(plan, intent, value)
@@ -220,24 +225,38 @@ class AutofillExecutor:
         field: LeverAutofillField,
         *,
         reason: str,
+        selector: str | None = None,
+        value: Any | None = None,
     ) -> FieldExecution:
-        payload = {
+        selector = selector or field.selector
+        payload: dict[str, Any] = {
             "event": "AUTOFILL_FIELD_SKIPPED",
             "candidateId": plan.candidate_id,
             "fieldKey": field.key,
-            "selector": field.selector,
+            "selector": selector,
             "reason": reason,
             "strategy": field.strategy,
         }
+        preview: str | None = None
+        length: int | None = None
+        hashed: str | None = None
+        if value is not None:
+            preview = _preview_value(value)
+            length = _value_length(value)
+            hashed = _value_hash(value)
+            payload["valueLength"] = length
+            payload["valueHash"] = hashed
+            if preview is not None:
+                payload["valuePreview"] = preview
         self._telemetry(payload)
         return FieldExecution(
             key=field.key,
-            selector=field.selector,
+            selector=selector,
             status="skipped",
             reason=reason,
-            value_preview=None,
-            value_length=None,
-            value_hash=None,
+            value_preview=preview,
+            value_length=length,
+            value_hash=hashed,
             artifacts=None,
         )
 
@@ -249,7 +268,9 @@ class AutofillExecutor:
     ) -> FieldExecution:
         selectors: Iterable[str] = self._selector_chain(field)
         last_error: str | None = None
+        last_selector: str | None = None
         for selector in selectors:
+            last_selector = selector
             artifacts, error = self._execute_with_selector(plan, field, selector, value)
             if artifacts is not None:
                 preview = _preview_value(value)
@@ -281,15 +302,12 @@ class AutofillExecutor:
                 last_error = error
             elif last_error is None:
                 last_error = "selector_failed"
-        return FieldExecution(
-            key=field.key,
-            selector=field.selector,
-            status="skipped",
+        return self._skip_field(
+            plan,
+            field,
             reason=last_error or "selector_failed",
-            value_preview=None,
-            value_length=None,
-            value_hash=None,
-            artifacts=None,
+            selector=last_selector,
+            value=value,
         )
 
     def _selector_chain(self, field: LeverAutofillField) -> Iterable[str]:
@@ -319,6 +337,8 @@ class AutofillExecutor:
         self._controller.wait_for_idle()
         after_html = self._capture_html(plan, field, selector, suffix="after")
         screenshot = self._capture_screenshot(plan, field, selector)
+        if screenshot is None:
+            return None, "screenshot_failed"
         artifact = FieldArtifact(
             key=field.key,
             screenshot_path=screenshot,
@@ -403,11 +423,27 @@ class AutofillExecutor:
         plan: LeverAutofillPlan,
         field: LeverAutofillField,
         selector: str,
-    ) -> Path:
+    ) -> Path | None:
         filename = f"{self._artifact_stem(plan, field, selector)}.png"
         path = self._screenshots_dir / filename
-        if not path.exists():
-            path.write_bytes(b"")
+        result = self._controller.capture_element_screenshot(selector, path)
+        if result.status is not BrowserActionStatus.OK:
+            if path.exists():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            return None
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        if size <= 0:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            return None
         return path
 
 

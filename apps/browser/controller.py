@@ -984,6 +984,81 @@ class BrowserUseController:
             telemetry=payload,
         )
 
+    def capture_element_screenshot(
+        self, selector: str, output_path: Path
+    ) -> BrowserActionResult:
+        """Capture a focused screenshot for the provided selector."""
+
+        client = self._ensure_client()
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = self._base_payload() | {
+            "selector": selector,
+            "path": str(output),
+        }
+        metadata: Dict[str, Any] = {}
+        method = "browser-use"
+        try:
+            capture_fn = getattr(client, "capture_element_screenshot", None)
+            if callable(capture_fn):
+                result = capture_fn(selector=selector, path=str(output))
+                metadata = self._sanitize_capture_result(result)
+                method = metadata.pop("method", method) or method
+            else:
+                page = getattr(client, "page", None)
+                if page is None:
+                    raise AttributeError("capture_element_missing")
+                locator_factory = getattr(page, "locator", None)
+                if callable(locator_factory):
+                    locator = locator_factory(selector)
+                    screenshot_fn = getattr(locator, "screenshot", None)
+                    if not callable(screenshot_fn):
+                        raise AttributeError("locator_screenshot_missing")
+                    screenshot_fn(path=str(output))
+                    method = "playwright.locator"
+                elif hasattr(page, "screenshot"):
+                    screenshot_fn = getattr(page, "screenshot")
+                    screenshot_fn(path=str(output), full_page=False)
+                    method = "playwright.page"
+                else:
+                    raise AttributeError("page_screenshot_missing")
+        except Exception as exc:  # pragma: no cover - defensive
+            event = payload | {
+                "event": "browser.capture_element.failed",
+                "error": str(exc),
+            }
+            log_event(event | {"level": "error"})
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=event,
+            )
+
+        if not output.exists() or output.stat().st_size == 0:
+            event = payload | {
+                "event": "browser.capture_element.empty",
+                "error": "screenshot_empty",
+            }
+            log_event(event | {"level": "error"})
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": "screenshot_empty"},
+                telemetry=event,
+            )
+
+        telemetry = payload | {
+            "event": "browser.capture_element.completed",
+            "method": method,
+        }
+        if metadata:
+            telemetry["metadata"] = metadata
+        log_event(telemetry)
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"path": str(output), "method": method},
+            telemetry=telemetry,
+        )
+
     def get_current_url(self) -> BrowserActionResult:
         """Return the current page URL using client shims (no event-loop dependency)."""
 

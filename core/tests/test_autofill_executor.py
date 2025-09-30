@@ -21,6 +21,9 @@ class StubController:
         self.checkbox_calls: list[tuple[str, bool]] = []
         self.upload_calls: list[tuple[str, Path]] = []
         self._html_counter = 0
+        self.screenshot_calls: list[tuple[str, Path]] = []
+        self.fail_selectors: set[str] = set()
+        self.screenshot_fail_selectors: set[str] = set()
 
     def focus(self, selector: str) -> BrowserActionResult:
         self.focus_calls.append(selector)
@@ -30,6 +33,12 @@ class StubController:
 
     def fill_text(self, selector: str, value: str) -> BrowserActionResult:
         self.fill_calls.append((selector, value))
+        if selector in self.fail_selectors:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": "fill_failed"},
+                telemetry={},
+            )
         return BrowserActionResult(
             status=BrowserActionStatus.OK, details={}, telemetry={}
         )
@@ -72,6 +81,24 @@ class StubController:
         return BrowserActionResult(
             status=BrowserActionStatus.OK,
             details=details,
+            telemetry={},
+        )
+
+    def capture_element_screenshot(
+        self, selector: str, output_path: Path
+    ) -> BrowserActionResult:
+        self.screenshot_calls.append((selector, output_path))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if selector in self.screenshot_fail_selectors:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": "capture_failed"},
+                telemetry={},
+            )
+        output_path.write_bytes(b"binary")
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"path": str(output_path)},
             telemetry={},
         )
 
@@ -175,4 +202,43 @@ def test_executor_handles_upload_success(tmp_path: Path) -> None:
     assert controller.upload_calls == [("input[type=file]", resume_path)]
     assert result.to_payload()["filled"] == 1
     assert any(event["event"] == "AUTOFILL_UPLOAD_SUCCESS" for event in events)
+
+
+def test_executor_emits_skip_telemetry_on_selector_exhaustion(tmp_path: Path) -> None:
+    controller = StubController()
+    controller.fail_selectors.add("input#name")
+    controller.screenshot_fail_selectors.add("input#name-fallback")
+    events: list[dict[str, Any]] = []
+
+    def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    executor = AutofillExecutor(
+        controller=controller,
+        run_dir=tmp_path,
+        telemetry_callback=record,
+        dry_run=False,
+    )
+    field = LeverAutofillField(
+        key="fullName",
+        value_key="fullName",
+        label="Full name",
+        selector="input#name",
+        field_type="text",
+        strategy="profile_answer",
+        fallback_selector="input#name-fallback",
+    )
+    plan = _build_plan(field)
+    result = executor.execute(plan, answers={"fullName": "Ada Lovelace"})
+
+    assert controller.fill_calls  # attempted fills
+    assert controller.screenshot_calls
+    execution = result.fields[0]
+    assert execution.status == "skipped"
+    assert execution.reason == "screenshot_failed"
+    assert execution.value_hash is not None
+    assert any(
+        event["event"] == "AUTOFILL_FIELD_SKIPPED" and event.get("valueHash")
+        for event in events
+    )
 
