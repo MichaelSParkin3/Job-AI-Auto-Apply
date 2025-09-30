@@ -27,6 +27,18 @@ Acceptance Criteria
 4. Guardrails enforce Lever + allowed widget domains while letting the LLM request auxiliary actions (scroll, tab switch) from a curated safe list.
 5. Integration tests stub Browser-Use to verify sequencing, telemetry, and artifact paths without launching Chrome.
 
+
+## Story 5.2.1 — Resume-First + Analysis Wait
+As an operator, I want the agent to upload the resume first, wait for Lever’s resume analysis (e.g., ‘Analyzing…’ ? ‘Success!’) to complete, then validate and fill remaining fields before proceeding (submit if allowed).
+
+Acceptance Criteria (summary)
+1. Upload resume before any autofill actions; emit RESUME_ANALYSIS_STARTED.
+2. Wait for success indicator or timeout; emit RESUME_ANALYSIS_DONE/RESUME_ANALYSIS_TIMEOUT.
+3. Validate auto-populated name/email/phone/links, overwrite with profile answers if invalid, then fill remaining fields; emit RESUME_FIELDS_VALIDATED.
+4. Preview after fills; submit only in allowed modes; keep existing artifacts/telemetry.
+5. Configurable selectors/timeouts in sites/lever config; unit tests cover success/timeout paths.
+
+(See docs/stories/5.2.1.resume-first-wait-for-analysis.md for full details.)
 ## Story 5.3 â€” Submit Attempt & Blocker Detection
 As a compliance stakeholder,
 I want the agent to attempt submit when all required fields are filled and gracefully detect blockers,
@@ -65,3 +77,4 @@ Acceptance Criteria
 
 ### Rationale (Epic 5)
 This epic demonstrates the core promise: AI-powered form filling that either submits autonomously or hands the baton to a human with all tedious work completed. It de-risks CAPTCHA and layout variance, captures audit-ready artifacts, and feeds the analytics needed to prove traction before scaling further automation.
+

@@ -785,6 +785,37 @@ class BrowserUseController:
             payload["profile"] = dict(self.config.profile_metadata)
         return payload
 
+    # Lightweight helpers to validate current domain around actions without
+    # incurring extra pacing. These avoid the full get_current_url telemetry
+    # to keep action logs clean while still surfacing guardrail events.
+    def _resolve_current_url(self) -> str | None:
+        try:
+            client = self._ensure_client()
+        except Exception:  # pragma: no cover - defensive
+            return None
+        try:
+            get_url = getattr(client, "get_current_url", None)
+            if callable(get_url):
+                value = get_url()
+                if value:
+                    return str(value)
+            page = getattr(client, "page", None)
+            if page is not None:
+                value = getattr(page, "url", None)
+                if callable(value):
+                    return str(value())
+                if value is not None:
+                    return str(value)
+        except Exception:  # pragma: no cover - best-effort
+            return None
+        return None
+
+    def _guard_current_domain(self, payload: Dict[str, Any], *, reason: str):
+        url = self._resolve_current_url()
+        if not url:
+            return None
+        return self._guardrails.check_current_domain(url, payload, reason=reason)
+
     @staticmethod
     def _extract_client_result(result: Any) -> Any:
         if isinstance(result, Mapping) and "result" in result:
@@ -984,6 +1015,81 @@ class BrowserUseController:
             telemetry=payload,
         )
 
+    def capture_element_screenshot(
+        self, selector: str, output_path: Path
+    ) -> BrowserActionResult:
+        """Capture a focused screenshot for the provided selector."""
+
+        client = self._ensure_client()
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = self._base_payload() | {
+            "selector": selector,
+            "path": str(output),
+        }
+        metadata: Dict[str, Any] = {}
+        method = "browser-use"
+        try:
+            capture_fn = getattr(client, "capture_element_screenshot", None)
+            if callable(capture_fn):
+                result = capture_fn(selector=selector, path=str(output))
+                metadata = self._sanitize_capture_result(result)
+                method = metadata.pop("method", method) or method
+            else:
+                page = getattr(client, "page", None)
+                if page is None:
+                    raise AttributeError("capture_element_missing")
+                locator_factory = getattr(page, "locator", None)
+                if callable(locator_factory):
+                    locator = locator_factory(selector)
+                    screenshot_fn = getattr(locator, "screenshot", None)
+                    if not callable(screenshot_fn):
+                        raise AttributeError("locator_screenshot_missing")
+                    screenshot_fn(path=str(output))
+                    method = "playwright.locator"
+                elif hasattr(page, "screenshot"):
+                    screenshot_fn = getattr(page, "screenshot")
+                    screenshot_fn(path=str(output), full_page=False)
+                    method = "playwright.page"
+                else:
+                    raise AttributeError("page_screenshot_missing")
+        except Exception as exc:  # pragma: no cover - defensive
+            event = payload | {
+                "event": "browser.capture_element.failed",
+                "error": str(exc),
+            }
+            log_event(event | {"level": "error"})
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=event,
+            )
+
+        if not output.exists() or output.stat().st_size == 0:
+            event = payload | {
+                "event": "browser.capture_element.empty",
+                "error": "screenshot_empty",
+            }
+            log_event(event | {"level": "error"})
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": "screenshot_empty"},
+                telemetry=event,
+            )
+
+        telemetry = payload | {
+            "event": "browser.capture_element.completed",
+            "method": method,
+        }
+        if metadata:
+            telemetry["metadata"] = metadata
+        log_event(telemetry)
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={"path": str(output), "method": method},
+            telemetry=telemetry,
+        )
+
     def get_current_url(self) -> BrowserActionResult:
         """Return the current page URL using client shims (no event-loop dependency)."""
 
@@ -1078,6 +1184,17 @@ class BrowserUseController:
             "file": file_info,
             "dryRun": dry_run,
         }
+        pre_decision = self._guard_current_domain(payload, reason="pre_upload")
+        if pre_decision is not None and not pre_decision.allowed:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": pre_decision.reason or "blocked_domain",
+                    "message": "Action blocked by domain guardrails.",
+                    "url": pre_decision.event.get("url"),
+                },
+                telemetry=pre_decision.telemetry,
+            )
         if think_time:
             self._guardrails.think_time(payload, reason="pre_upload")
         start = time.monotonic()
@@ -1225,6 +1342,18 @@ class BrowserUseController:
 
         client = self._ensure_client()
         payload = self._base_payload() | {"selector": selector, "timeout": timeout}
+        # Pre-action domain validation (in case a prior step navigated away)
+        pre_decision = self._guard_current_domain(payload, reason="pre_click")
+        if pre_decision is not None and not pre_decision.allowed:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": pre_decision.reason or "blocked_domain",
+                    "message": "Action blocked by domain guardrails.",
+                    "url": pre_decision.event.get("url"),
+                },
+                telemetry=pre_decision.telemetry,
+            )
         if think_time:
             self._guardrails.think_time(payload, reason="pre_click")
         try:
@@ -1244,6 +1373,18 @@ class BrowserUseController:
                 details={"error": str(exc)},
                 telemetry=payload,
             )
+        # Post-action domain validation (ensure click didn't navigate off-domain)
+        post_decision = self._guard_current_domain(payload, reason="post_click")
+        if post_decision is not None and not post_decision.allowed:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": post_decision.reason or "blocked_domain",
+                    "message": "Navigation after click blocked by domain guardrails.",
+                    "url": post_decision.event.get("url"),
+                },
+                telemetry=post_decision.telemetry,
+            )
         telemetry = payload | {"event": "browser.safe_click.ok"}
         return BrowserActionResult(
             status=BrowserActionStatus.OK,
@@ -1262,6 +1403,17 @@ class BrowserUseController:
 
         client = self._ensure_client()
         payload = self._base_payload() | {"selector": selector, "timeout": timeout}
+        pre_decision = self._guard_current_domain(payload, reason="pre_focus")
+        if pre_decision is not None and not pre_decision.allowed:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": pre_decision.reason or "blocked_domain",
+                    "message": "Action blocked by domain guardrails.",
+                    "url": pre_decision.event.get("url"),
+                },
+                telemetry=pre_decision.telemetry,
+            )
         if think_time:
             self._guardrails.think_time(payload, reason="pre_focus")
         try:
@@ -1304,6 +1456,17 @@ class BrowserUseController:
             "selector": selector,
             "clear": clear,
         }
+        pre_decision = self._guard_current_domain(payload, reason="pre_fill")
+        if pre_decision is not None and not pre_decision.allowed:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": pre_decision.reason or "blocked_domain",
+                    "message": "Action blocked by domain guardrails.",
+                    "url": pre_decision.event.get("url"),
+                },
+                telemetry=pre_decision.telemetry,
+            )
         if think_time:
             self._guardrails.think_time(payload, reason="pre_fill")
         try:
@@ -1342,6 +1505,17 @@ class BrowserUseController:
 
         client = self._ensure_client()
         payload = self._base_payload() | {"selector": selector}
+        pre_decision = self._guard_current_domain(payload, reason="pre_select")
+        if pre_decision is not None and not pre_decision.allowed:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": pre_decision.reason or "blocked_domain",
+                    "message": "Action blocked by domain guardrails.",
+                    "url": pre_decision.event.get("url"),
+                },
+                telemetry=pre_decision.telemetry,
+            )
         if think_time:
             self._guardrails.think_time(payload, reason="pre_select")
         try:
@@ -1380,6 +1554,17 @@ class BrowserUseController:
 
         client = self._ensure_client()
         payload = self._base_payload() | {"selector": selector}
+        pre_decision = self._guard_current_domain(payload, reason="pre_radio")
+        if pre_decision is not None and not pre_decision.allowed:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": pre_decision.reason or "blocked_domain",
+                    "message": "Action blocked by domain guardrails.",
+                    "url": pre_decision.event.get("url"),
+                },
+                telemetry=pre_decision.telemetry,
+            )
         if think_time:
             self._guardrails.think_time(payload, reason="pre_radio")
         try:
@@ -1418,6 +1603,17 @@ class BrowserUseController:
 
         client = self._ensure_client()
         payload = self._base_payload() | {"selector": selector, "checked": checked}
+        pre_decision = self._guard_current_domain(payload, reason="pre_checkbox")
+        if pre_decision is not None and not pre_decision.allowed:
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={
+                    "error": pre_decision.reason or "blocked_domain",
+                    "message": "Action blocked by domain guardrails.",
+                    "url": pre_decision.event.get("url"),
+                },
+                telemetry=pre_decision.telemetry,
+            )
         if think_time:
             self._guardrails.think_time(payload, reason="pre_checkbox")
         try:

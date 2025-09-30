@@ -57,12 +57,11 @@
   CLI status line (attempts + simulated flag). Failures capture artifacts under `runs/<id>/resume/` and bubble structured
   diagnostics back to QA for investigation.
 
-### AutoFill Orchestrator (Epic 5)
-- `core/autofill/orchestrator.AutoFillOrchestrator` replays LLM-enriched plans inside Browser-Use, invoking higher-level actions (`fill_intent`, `resolve_widget`, `perform_submit`) and recording before/after DOM snapshots.
-- Telemetry emits `AUTOFILL_PLAN_READY`, `AUTOFILL_FIELD_FILLED/SKIPPED`, `AUTOFILL_UPLOAD_SUCCESS/FAILURE`, `AUTOFILL_HANDOFF_READY`, and `AUTOFILL_DEMO_COMPLETED`, all redacting PII via value length hashing.
-- Handoff snapshots serialize DOM selectors, field values, upload status, and scroll positions to `runs/<id>/handoff/<candidate>.json` alongside focused screenshots for the UI banner.
-- Resume API (`POST /api/run/{id}/handoff/{candidate}/launch`) calls back into the orchestrator to restore the Chrome session, replay saved intents without clicking submit, and expose a blocking future until the user confirms outcome.
-- Dry-run fixtures live under `apps/browser/tests/autofill/` and assert deterministic plan execution without starting Chrome by mocking Browser-Use primitives.
+### AutoFill Executor (Epic 5)
+- `core/autofill/executor.AutofillExecutor` replays persisted `LeverAutofillPlan` intents inside Browser-Use using deterministic primitives (`focus`, `fill_text`, `set_select_value`, `set_radio_value`, `set_checkbox_state`, `upload_file`). It hashes value previews, captures before/after DOM HTML, and stores focused screenshots under `runs/<id>/autofill/` for audit.
+- Telemetry now includes `AUTOFILL_PLAN_READY`, `AUTOFILL_FIELD_FILLED`, `AUTOFILL_FIELD_SKIPPED`, `AUTOFILL_UPLOAD_SUCCESS`, and `AUTOFILL_UPLOAD_FAILURE`. Each payload carries strategy metadata and redacted value hashes so analytics can distinguish deterministic fallbacks versus LLM-guided fills without leaking PII.
+- CLI `python app.py apply plan --mode ai_autofill` launches headful Browser-Use, announces plan readiness, streams executor progress, and persists session handles via `RunStore.record_browser_session` (sessionId, user-data-dir, CDP endpoint, window handle) for crash recovery.
+- Guardrail or action failures surface structured skip reasons while leaving the session interactive for manual intervention. Dry-run mode short-circuits executor dispatch but still emits telemetry so QA can validate sequencing without touching the DOM.
 
 ## Artifact & History Store
 **Responsibility:** Persist screenshots, `run.json`, HTML snapshot, redacted `actions.log`, append `history.jsonl`.
@@ -72,6 +71,9 @@
 **Dependencies:** Windows filesystem
 
 **Technology Stack:** Python repository module (fileâ€‘based)
+
+**Implementation Notes:**
+- `RunStore.record_browser_session` stores Browser-Use session identifiers, Chrome profile paths, CDP endpoints, and window handles in `run.json` so ai_autofill runs can be rehydrated after crashes or for telemetry review.
 
 ## Dedupe Service
 **Responsibility:** Compute fingerprint, enforce 30â€‘day window, bypass when expired.

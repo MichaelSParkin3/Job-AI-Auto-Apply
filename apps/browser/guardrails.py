@@ -124,6 +124,49 @@ class NavigationGuardrails:
             wait_seconds=wait_ms / 1000.0,
         )
 
+    def check_current_domain(
+        self, url: str, payload: Dict[str, Any], *, reason: str = "post_action"
+    ) -> GuardrailDecision:
+        """Lightweight domain check for the current URL without pacing.
+
+        Used after or before actions to ensure the active page remains within
+        the allowed domain set. Emits a BLOCKED_DOMAIN event on violation but
+        does not sleep or emit NAVIGATE.
+        """
+
+        event_payload = payload | {
+            "guardrails": {
+                "allowedDomains": list(self._allowed_domains),
+                "tabCount": self._tab_count,
+                "blockedTabAttempts": self._blocked_tab_attempts,
+            }
+        }
+        if not self._is_allowed(url):
+            event = event_payload | {
+                "event": "guardrail.browser.BLOCKED_DOMAIN",
+                "url": url,
+                "reason": reason,
+            }
+            self._log_event(event)
+            return GuardrailDecision(
+                allowed=False,
+                event=event,
+                telemetry=event_payload | {"guardrailEvent": event},
+                reason="blocked_domain",
+            )
+
+        event = event_payload | {
+            "event": "guardrail.browser.CURRENT_DOMAIN_ALLOWED",
+            "url": url,
+            "reason": reason,
+        }
+        self._log_event(event)
+        return GuardrailDecision(
+            allowed=True,
+            event=event,
+            telemetry=event_payload | {"guardrailEvent": event},
+        )
+
     def block_new_tab(self, payload: Dict[str, Any], *, reason: str) -> GuardrailDecision:
         """Record a new-tab attempt and return a blocking decision."""
 

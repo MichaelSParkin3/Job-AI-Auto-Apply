@@ -525,6 +525,31 @@ class RunStore:
         self._write_run_json(record.run_json_path, data)
         return data
 
+    def record_browser_session(
+        self,
+        record: RunRecord,
+        *,
+        session_id: str,
+        user_data_dir: Path,
+        model: str | None = None,
+        cdp_url: str | None = None,
+        window_handle: str | None = None,
+    ) -> Dict[str, Any]:
+        """Persist Browser-Use session metadata for the run."""
+
+        data = self._load_run_json(record.run_json_path)
+        payload = data.setdefault("browserSession", {})
+        payload["sessionId"] = session_id
+        payload["userDataDir"] = str(user_data_dir)
+        if model:
+            payload["model"] = model
+        if cdp_url:
+            payload["cdpUrl"] = cdp_url
+        if window_handle:
+            payload["windowHandle"] = window_handle
+        self._write_run_json(record.run_json_path, data)
+        return data
+
     def record_quick_apply_discovery(
         self, record: RunRecord, discovery_payload: Dict[str, Any]
     ) -> Dict[str, Any]:

@@ -1,0 +1,38 @@
+schema: 1
+story: '5.2'
+story_title: 'Headful Browser-Use Auto Fill Execution'
+gate: PASS
+status_reason: 'Domain/action guardrails now enforced pre/post action for ai_autofill; controller emits guardrail.browser.BLOCKED_DOMAIN and executor skips fields accordingly. Unit test added.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-09-30T00:00:00Z'
+
+top_issues: []
+
+waiver:
+  active: false
+
+quality_score: 92
+expires: '2026-01-15T00:00:00Z'
+
+evidence:
+  tests_reviewed: 3
+  risks_identified: 0
+  trace:
+    ac_covered: [1, 2, 3, 4, 5, 6]
+    ac_gaps: []
+    notes: 'Added test core/tests/test_autofill_executor.py::test_autofill_blocks_and_emits_guardrail_on_disallowed_domain verifying BLOCKED_DOMAIN telemetry and field skip on off-domain navigation.'
+
+nfr_validation:
+  _assessed: [auditability, observability]
+  auditability:
+    status: PASS
+    notes: 'Element screenshots are now captured through Browser-Use controller fallbacks with empty captures treated as failures.'
+  observability:
+    status: PASS
+    notes: 'Selector exhaustion and dry-run skips emit AUTOFILL_FIELD_SKIPPED telemetry with hashed payloads, restoring monitoring coverage.'
+
+  recommendations:
+    immediate:
+    - 'None'
+    future:
+    - 'Optional: add higher-level integration test covering pre/post click checks with a real client stub.'
