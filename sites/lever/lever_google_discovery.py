@@ -24,7 +24,7 @@ def build_google_query(
 ) -> str:
     """Return a Google search URL constrained to Lever apply pages."""
 
-    q_parts: List[str] = ["site:jobs.lever.co/apply"]
+    q_parts: List[str] = ["site:jobs.lever.co"]
     for term in terms:
         normalized = (term or "").strip()
         if normalized:

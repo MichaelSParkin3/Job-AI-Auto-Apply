@@ -20,8 +20,8 @@ from sites.lever.lever_google_discovery import (  # noqa: E402
 @pytest.mark.parametrize(
     "terms,location,time_window,expected",
     [
-        (["front end"], "remote us", "d", "q=site%3Ajobs.lever.co%2Fapply+front+end+remote+us"),
-        (["data", "scientist"], None, "w", "q=site%3Ajobs.lever.co%2Fapply+data+scientist"),
+        (["front end"], "remote us", "d", "q=site%3Ajobs.lever.co+front+end+remote+us"),
+        (["data", "scientist"], None, "w", "q=site%3Ajobs.lever.co+data+scientist"),
     ],
 )
 def test_build_google_query_encodes_terms(terms, location, time_window, expected):
