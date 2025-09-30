@@ -1,0 +1,42 @@
+schema: 1
+story: '4.3'
+story_title: 'Preview UI Queue Drawer & Keyboard Flow'
+gate: PASS
+status_reason: 'Re-test confirms drawer now uses Radix dialog primitives with enforced focus trap and Escape/overlay dismissal; keyboard workflow and optimistic updates continue to pass automated coverage.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-12-11T00:00:00Z'
+
+top_issues:
+  - id: AX1
+    title: 'Radix dialog emits description warning'
+    severity: WARN
+    detail: 'Console warns "Missing Description or aria-describedby" for the queue drawer content; screen readers still announce the title, but guidance recommends wiring `DialogPrimitive.Description` for parity.'
+
+waiver:
+  active: false
+
+quality_score: 92
+expires: '2025-12-18T00:00:00Z'
+
+evidence:
+  tests_reviewed: 1
+  risks_identified: 1
+  trace:
+    ac_covered: [1, 2, 3, 4, 5]
+    ac_gaps: []
+    notes: '`pnpm --filter @app/ui test` validates queue drawer rendering, keyboard navigation, optimistic decisions, and focus containment after the accessibility fix.'
+
+nfr_validation:
+  _assessed: [accessibility, usability]
+  accessibility:
+    status: WARN
+    notes: 'Focus trap validated; remaining console warning indicates description wiring refinement still pending.'
+  usability:
+    status: PASS
+    notes: 'Drawer interaction, shortcut legend toggling, and optimistic flows behave consistently across manual navigation paths.'
+
+recommendations:
+  immediate:
+    - 'Replace the custom screen-reader paragraph with `DialogPrimitive.Description` (or equivalent) to clear Radix accessibility warnings.'
+  future:
+    - 'Add regression coverage asserting the dialog content exposes an aria description to prevent accidental regressions.'

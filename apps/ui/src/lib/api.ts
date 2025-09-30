@@ -37,12 +37,81 @@ export interface ActionResponse {
   decidedAt?: string;
 }
 
+export interface CandidatePosting {
+  postingUrl?: string;
+  title?: string;
+  company?: string;
+  location?: string;
+}
+
+export interface ApplicationCandidateSummary {
+  id: string;
+  posting?: CandidatePosting;
+  formPlanPath?: string;
+  discoveredAt?: string;
+  state:
+    | "discovered"
+    | "planned"
+    | "awaiting_decision"
+    | "decided"
+    | "submitted"
+    | "shelved";
+  lastDecisionId?: string;
+}
+
+export interface SubmissionDecision {
+  decisionId: string;
+  candidateId: string;
+  outcome: "approve" | "abort" | "edit_request" | "needs_review";
+  mode: "human" | "ai";
+  confidence: number;
+  rationale?: string;
+  requestedChanges?: Array<{ field: string; value: string; reason: string }>;
+  timestamp: string;
+}
+
+export interface ReviewQueueSnapshot {
+  mode: "review" | "auto_review" | "auto_submit";
+  pending: ApplicationCandidateSummary[];
+  decided: SubmissionDecision[];
+  escalated: ApplicationCandidateSummary[];
+  lastUpdated: string;
+}
+
+export interface ManualOverrideEntry {
+  decision: SubmissionDecision;
+  createdAt: string;
+}
+
+interface ApiErrorDetail {
+  error?: {
+    code?: string;
+    message?: string;
+    details?: Record<string, unknown>;
+    requestId?: string;
+  };
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || "Request failed");
+    const message = await extractErrorMessage(response);
+    throw new Error(message);
   }
   return response.json() as Promise<T>;
+}
+
+async function extractErrorMessage(response: Response): Promise<string> {
+  try {
+    const json = (await response.json()) as ApiErrorDetail;
+    const description = json.error?.message || json.error?.code;
+    if (description) {
+      return description;
+    }
+  } catch (error) {
+    // Ignore JSON parsing errors and fall back to text payload.
+  }
+  const detail = await response.text();
+  return detail || "Request failed";
 }
 
 export async function createPreviewRun(): Promise<PreviewResponse> {
@@ -76,4 +145,28 @@ export async function editRun(runId: string, text: string): Promise<ActionRespon
     body: JSON.stringify(payload),
   });
   return parseJson<ActionResponse>(response);
+}
+
+export async function fetchQueueSnapshot(
+  runId: string
+): Promise<ReviewQueueSnapshot> {
+  const response = await fetch(`/api/queue/${runId}`);
+  return parseJson<ReviewQueueSnapshot>(response);
+}
+
+export async function submitQueueDecision(
+  runId: string,
+  decision: SubmissionDecision
+): Promise<void> {
+  const response = await fetch(`/api/queue/${runId}/decision`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(decision),
+  });
+  if (!response.ok) {
+    const message = await extractErrorMessage(response);
+    throw new Error(message);
+  }
 }
