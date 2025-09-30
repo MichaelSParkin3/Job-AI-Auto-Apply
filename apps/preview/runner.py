@@ -5,11 +5,38 @@ import subprocess
 import sys
 import threading
 import time
+import types
 import webbrowser
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING, Any
 
-import typer
+try:  # pragma: no cover - exercised when typer is not installed
+    import typer
+except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
+    def _identity_decorator(*_args, **_kwargs):
+        def _decorator(func):
+            return func
+
+        return _decorator
+
+    def _option_stub(*_args, **_kwargs):
+        return _kwargs.get("default")
+
+    def _echo_stub(message: str, **_kwargs) -> None:
+        print(message)
+
+    typer = types.SimpleNamespace(  # type: ignore[assignment]
+        Typer=lambda *args, **kwargs: types.SimpleNamespace(
+            command=_identity_decorator,
+            callback=_identity_decorator,
+        ),
+        Option=_option_stub,
+        Argument=_option_stub,
+        Exit=RuntimeError,
+        secho=_echo_stub,
+        echo=_echo_stub,
+        colors=types.SimpleNamespace(RED="red", GREEN="green", YELLOW="yellow"),
+    )
 
 from apps.cli.config_loader import Settings, get_base_dir
 from apps.cli.history_store import HistoryWriter

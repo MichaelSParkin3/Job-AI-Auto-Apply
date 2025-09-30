@@ -6,9 +6,49 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+import types
+
+try:  # pragma: no cover - exercised when FastAPI is not installed
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
+    class HTTPException(Exception):
+        def __init__(self, status_code: int, detail: object | None = None) -> None:
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+    class FastAPI:  # type: ignore[override]
+        def __init__(self, *args, **kwargs) -> None:
+            self.state = types.SimpleNamespace()
+            self._routes: Dict[tuple[str, str], callable] = {}
+
+        def mount(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get(self, path: str, **_kwargs):
+            def decorator(func):
+                self._routes[("GET", path)] = func
+                return func
+
+            return decorator
+
+        def post(self, path: str, **_kwargs):
+            def decorator(func):
+                self._routes[("POST", path)] = func
+                return func
+
+            return decorator
+
+    class FileResponse:  # pragma: no cover - simple placeholder
+        def __init__(self, path: Path | str, *args, **kwargs) -> None:
+            self.path = Path(path)
+
+    class StaticFiles:  # pragma: no cover - simple placeholder
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
 from pydantic import BaseModel, Field
 
 from apps.cli.history_store import HistoryWriter

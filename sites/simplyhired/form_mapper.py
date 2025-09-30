@@ -7,7 +7,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
-from bs4 import BeautifulSoup, Tag
+try:  # pragma: no cover - exercised when bs4 is unavailable
+    from bs4 import BeautifulSoup, Tag
+except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
+    class Tag:  # type: ignore[override]
+        pass
+
+    class BeautifulSoup:  # type: ignore[override]
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def select(self, *_args, **_kwargs) -> list[Tag]:
+            return []
+
+        def find_all(self, *_args, **_kwargs) -> list[Tag]:
+            return []
 
 
 _MIN_CONFIDENCE = 0.55

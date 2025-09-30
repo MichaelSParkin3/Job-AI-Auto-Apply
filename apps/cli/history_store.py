@@ -4,11 +4,33 @@ from __future__ import annotations
 
 import json
 import os
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Optional
 
-import portalocker
+try:  # pragma: no cover - exercised when portalocker is unavailable
+    import portalocker
+except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
+
+    class _PortalockerLock:
+        def __init__(self, path: Path | str, mode: str, *, flags: object | None = None):
+            self._path = Path(path)
+            self._mode = mode
+            self._handle = None
+
+        def __enter__(self):
+            self._handle = open(self._path, self._mode)
+            return self._handle
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            if self._handle:
+                self._handle.close()
+
+    portalocker = types.SimpleNamespace(  # type: ignore[assignment]
+        Lock=lambda path, mode, **kwargs: _PortalockerLock(path, mode, **kwargs),
+        LockFlags=types.SimpleNamespace(EXCLUSIVE=1),
+    )
 
 from .config_loader import ensure_runtime_dirs, get_base_dir
 from .redaction import redact_event

@@ -6,20 +6,89 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Type,
+    TypeVar,
+)
 
 import re
 import unicodedata
 
 import yaml
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationError,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, Field, ValidationError
+
+try:  # pragma: no cover - exercised indirectly via QA environments
+    from pydantic import ConfigDict, field_validator, model_validator
+    _PYDANTIC_V2 = True
+except ImportError:  # Pydantic v1 fallback shim for QA/runtime compatibility
+    from pydantic import root_validator, validator
+
+    _PYDANTIC_V2 = False
+
+    ConfigDict = dict  # type: ignore[assignment]
+
+    if not hasattr(BaseModel, "model_validate"):
+
+        @classmethod
+        def _model_validate(cls, data: Any):  # type: ignore[override]
+            return cls.parse_obj(data)
+
+        setattr(BaseModel, "model_validate", _model_validate)
+
+    if not hasattr(BaseModel, "model_dump"):
+
+        def _model_dump(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+            return self.dict(*args, **kwargs)
+
+        setattr(BaseModel, "model_dump", _model_dump)
+
+    def field_validator(field_name: str, *args: Any, **kwargs: Any):
+        """Shim that maps v2-style field validators onto pydantic v1."""
+
+        if "allow_reuse" not in kwargs:
+            kwargs["allow_reuse"] = True
+        return validator(field_name, *args, **kwargs)
+
+    TModel = TypeVar("TModel", bound=BaseModel)
+
+    def model_validator(*, mode: str):
+        """Shim that maps v2 `model_validator` onto v1 `root_validator`."""
+
+        if mode != "after":
+            raise ValueError("pydantic<2 compatibility only supports mode='after'")
+
+        def decorator(func: Callable[[TModel], TModel | Dict[str, Any] | None]):
+            def _root_validator(cls: Type[TModel], values: Dict[str, Any]):
+                instance = cls.construct(  # type: ignore[attr-defined]
+                    _fields_set=set(values.keys()), **values,
+                )
+                result = func(instance)
+                if result is None or isinstance(result, BaseModel):
+                    target = instance if result is None else result
+                    updated_values = dict(values)
+                    for key in updated_values.keys():
+                        if hasattr(target, key):
+                            updated_values[key] = getattr(target, key)
+                    return updated_values
+                if isinstance(result, dict):
+                    return result
+                raise TypeError(
+                    "model_validator compatibility expects the decorated function to "
+                    "return None, a BaseModel instance, or a dict."
+                )
+
+            _root_validator.__name__ = func.__name__
+            return root_validator(pre=False, allow_reuse=True)(_root_validator)
+
+        return decorator
 
 from .config_loader import (
     active_profile_marker_path,
@@ -492,6 +561,15 @@ class ProfileConfig(BaseModel):
         if self.plan.google_cse_cx:
             overrides["google_cse_cx"] = self.plan.google_cse_cx.strip()
         return overrides
+
+
+if not _PYDANTIC_V2:
+    ProfileConfig.update_forward_refs(
+        SearchConfig=ProfileConfig.SearchConfig,
+        PlanOverridesConfig=ProfileConfig.PlanOverridesConfig,
+        BrowserOverridesConfig=BrowserOverridesConfig,
+        SessionBackupConfig=SessionBackupConfig,
+    )
 
 
 @dataclass
