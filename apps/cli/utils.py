@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -57,7 +58,8 @@ def log_event(event: Dict[str, Any]) -> None:
         record.setdefault("runId", context.id)
     redacted = redact_event(record)
     line = json.dumps(redacted, ensure_ascii=False, sort_keys=True)
-    print(line)
+    sys.stderr.write(line + "\n")
+    sys.stderr.flush()
     if context:
         _append_actions_log(context.logs_path, line)
 

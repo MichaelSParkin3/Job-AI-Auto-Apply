@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import hashlib
 import json
@@ -14,6 +15,8 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 from urllib.error import URLError
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
+
+os.environ.setdefault("BROWSER_USE_SETUP_LOGGING", "false")
 
 try:  # pragma: no cover - exercised in environments without typer installed
     import typer

@@ -42,6 +42,10 @@ ARTIFACTS_KEEP_DAYS=30
 # AI mode guardrails
 AI_DECISION_MODEL=deepseek/deepseek-chat-v3.1:free
 AI_AUTO_SUBMIT_CONFIDENCE=0.85
+# Browser-Use logging (CLI defaults to false to keep stdout clean)
+BROWSER_USE_SETUP_LOGGING=false
 ```
+
+The CLI sets `BROWSER_USE_SETUP_LOGGING=false` before importing Browser-Use so discovery telemetry stays on stderr. Override to `true` when you need the upstream formatting and are not piping structured CLI output.
 
 ---

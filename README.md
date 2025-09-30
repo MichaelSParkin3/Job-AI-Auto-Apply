@@ -1,272 +1,286 @@
 # Job-AI-Auto-Apply
 
-Local-first, review-first automation for job applications. This repo now ships the end-to-end dry-run demo experience: a Typer CLI that boots a FastAPI preview service, serves a React UI, and lets you approve/decline edits before anything is submitted.
+Local-first, review-first automation for job applications. The CLI discovers roles, prepares Lever apply forms, captures a full review bundle, and hands everything to a local preview UI before any submission happens.
 
-Status: Story 4.3 (Preview queue drawer & keyboard flow) implemented.
+Status: Story 4.3 (preview queue drawer & keyboard flow) implemented.
 
-## What’s New in 4.3
-- Preview UI now loads the review queue snapshot, surfaces pending/escalated/decided candidates, and persists drawer visibility per session.
-- Keyboard shortcuts (`Shift+A` approve, `Shift+X` escalate, `J/K` navigate, `Shift+?` legend) manage queue navigation and decisions with optimistic updates and error rollback.
-- Suggested outcome pill and manual override log highlight current queue state alongside the selected candidate’s summary.
-- React Testing Library suites cover queue rendering, navigation, shortcut legend toggling, optimistic success, and error rollback flows.
+---
 
-## What’s New in 4.1.6
-- `python app.py apply plan --source lever-google` can launch Browser-Use with `--browser-discovery` to capture SERP HTML,
-  persist artifacts under `runs/<id>/plan/`, and enrich plan JSON with deduped Lever results.
-- Programmable Search support: use `--programmable-search` together with `GOOGLE_CSE_KEY`/`GOOGLE_CSE_CX` (or CLI overrides)
-  to call Google’s Custom Search API when headless discovery is preferred.
-- Plan guardrails now record Google allowlist domains alongside Lever defaults so run summaries reflect the expanded surface.
+## Table of Contents
+1. [Overview](#overview)
+2. [System Requirements](#system-requirements)
+3. [Installation](#installation)
+4. [Step-by-Step Usage](#step-by-step-usage)
+   - [Step 0 – Prepare the workspace](#step-0--prepare-the-workspace)
+   - [Step 1 – Initialize configuration](#step-1--initialize-configuration)
+   - [Step 2 – Create and validate profiles](#step-2--create-and-validate-profiles)
+   - [Step 3 – Generate a Lever plan](#step-3--generate-a-lever-plan)
+   - [Step 4 – Run Lever review automation](#step-4--run-lever-review-automation)
+   - [Step 5 – Review candidates in the preview UI](#step-5--review-candidates-in-the-preview-ui)
+   - [Step 6 – Explore the dry-run demo](#step-6--explore-the-dry-run-demo)
+5. [Command Reference](#command-reference)
+6. [Environment Variables & Logging](#environment-variables--logging)
+7. [Troubleshooting](#troubleshooting)
+8. [Release Highlights](#release-highlights)
+9. [Testing](#testing)
+10. [Project Structure](#project-structure)
+11. [Contributing](#contributing)
 
-## What’s New in 3.3
-- `python app.py apply open` now replays the persisted SimplyHired `FormFillPlan` instead of re-scraping HTML. The new
-  `FormFillExecutor` drives Browser-Use via high-level primitives (`fill_text`, `set_select_value`, `set_radio_value`,
-  `set_checkbox_state`, `focus`) and emits `FIELD_*` telemetry for every attempt.
-- `ProfileAnswerResolver` normalises profile answers (trimmed strings, lower-cased email, E.164-style phone output,
-  override fallbacks) and generates masked previews so CLI logs and artifacts never leak raw PII.
-- Run persistence adds a `formFill` payload to `run.json` and `history.jsonl`, summarising filled/skipped/issue counts per
-  step. The CLI prints a per-step table for quick inspection during dry runs and records validation warnings for empty
-  required fields.
+---
 
+## Overview
+- **Privacy by default** – everything runs locally; PII never leaves your machine.
+- **Review-first UX** – every automation step is staged for human approval; no blind submits.
+- **Deterministic demo flow** – `apply demo` launches a canned run so you can validate the stack safely.
 
-## What’s New in 3.1.5
-- Upgraded to Browser‑Use 0.7.x with an adapter that waits for BrowserConnectedEvent/agent focus and exposes sync primitives (`open_url`, `wait_for_idle`, `safe_click`, `get_page_html`).
-- Added CDP `Page.navigate` fallback to avoid "stuck on Google/new tab" during first navigation.
-- Applied locale/timezone via environment (`LANG`/`LC_ALL`/`TZ`), `Accept-Language`, and `--lang` (no deprecated kwargs).
-- Updated SimplyHired readiness selectors with a 2025 `data-testid` variant; discovery detects inline vs modal Quick Apply after card click.
-- Session backups: live runs default to backups disabled unless explicitly enabled; when enabled, cache/lock files are skipped.
-- Windows console output set to UTF‑8 to avoid emoji logging crashes; you can also export `PYTHONIOENCODING=utf-8`.
-- Docs: architecture and PRD updated; README includes a “Browser‑Use 0.7.x Notes” section plus upstream links.
+Core building blocks:
+- Typer CLI (`python app.py …`) with subcommands: `apply`, `profiles`, `config`, `history`.
+- Browser-Use 0.7.9 wrapper for headful Chrome sessions with guardrails and pacing.
+- FastAPI preview server that serves the React UI at http://localhost:4950/ui.
+- Filesystem run store (`runs/<runId>/`) with redacted JSONL logging and queue snapshots.
 
-## Why
-- Privacy by default: runs on your machine; artifacts stored locally
-- Review-first UX: no blind submissions — you approve before actions
-- Deterministic demo flow: safe dry-run path to validate the stack
+---
 
-## Features (current)
-- Typer CLI with subcommands: `apply`, `profiles`, `config`, `history`
-- FastAPI preview service that launches alongside the CLI demo flow and serves the React UI on http://localhost:4950/ui
-- Config loader with precedence: CLI > profile marker > profile YAML > global `config/config.yaml`
-- Idempotent `config init` + runtime folders (`config/`, `data/profiles/`, `data/resumes/`, `.local/browser/profiles/`, `.local/state/`, `runs/`, `history/`)
-- Profile management commands (`profiles new|validate|list|use|current`) with Pydantic schema enforcement
-- Optional `.env.local` for OpenRouter; missing file is a warning, not an error
-- Filesystem run store provisioning per-demo folders with seeded `run.json`
-- Redacted JSON event logging pipeline writing to stdout and `actions.log`
-- Append-only `history/history.jsonl` entries for demo runs
-- Retention placeholders in `config.yaml` for artifacts, history, and actions log size caps
-
-## Quickstart
-### Prerequisites
-- Windows 10/11
+## System Requirements
+- Windows 10/11 (PowerShell examples below)
 - Python 3.11+
 - Node.js 22 LTS + pnpm 9
-- Google Chrome Stable (for CLI-opened preview window)
+- Google Chrome Stable (headful automation + preview app mode)
 
-### Setup
-```bash
-# Create virtual env (PowerShell examples)
+Optional:
+- OpenRouter API key (LLM) if you plan to use Browser-Use models behind OpenRouter
+- Google Programmable Search API key + CX if you want CSE-based Lever discovery
+
+---
+
+## Installation
+```powershell
+# Create and activate the virtual environment
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-# Install Python dependencies (editable)
+# Install Python dependencies (editable install)
 pip install -U pip
 pip install -e .[dev]
-# If your Python < 3.11 or editable install fails, install minimal deps:
-# pip install typer python-dotenv PyYAML fastapi httpx pytest
 
 # Install UI dependencies (from repo root)
 pnpm install
 ```
+If editable installs are not available, install the minimal set instead:
+```powershell
+pip install typer python-dotenv pyyaml fastapi httpx pytest
+```
 
-### Initialize and Inspect Config
-```bash
+---
+
+## Step-by-Step Usage
+
+### Step 0 – Prepare the workspace
+1. Clone the repo and `cd` into it.
+2. Copy `.env.local.example` to `.env.local` (if present) or create one manually (see [Environment Variables](#environment-variables--logging)).
+3. Make sure your PowerShell session is running from the project root. All relative paths below assume the repo root.
+
+### Step 1 – Initialize configuration
+```powershell
 python app.py --help
-python app.py config init          # creates config/config.yaml and runtime folders
-python app.py config show          # prints effective settings as JSON
-python app.py apply demo --dry-run --limit 1
-# provisions a run dir, launches the FastAPI preview service, and opens the local React UI
-# add --no-browser to keep Chrome from auto-launching
+python app.py config init    # creates config/config.yaml and runtime directories
+python app.py config show    # prints the effective settings as JSON
 ```
+`config init` provisions:
+- `config/config.yaml`
+- `data/profiles/`, `data/resumes/`
+- `.local/browser/profiles/`, `.local/browser/backups/`
+- `runs/`, `history/`
 
-### Run the Interactive Demo Preview
-```bash
-# Launch the full demo flow (opens Chrome app-mode pointing at the preview UI)
-python app.py apply demo --dry-run --limit 1
+### Step 2 – Create and validate profiles
+Profiles drive automation answers and Browser-Use guardrails. Each profile has a YAML file and a resume PDF.
+```powershell
+python app.py profiles new frontend-dev
+# Edit data/profiles/frontend-dev.yaml and copy a resume to data/resumes/frontend-dev/resume.pdf
+python app.py profiles validate frontend-dev
+python app.py profiles use frontend-dev
+python app.py profiles current
+python app.py profiles list
+```
+Validation surfaces structured JSON errors (`profiles.validation_failed`) until the resume exists and the YAML passes schema checks.
 
-# Skip auto-opening Chrome if you prefer to visit http://localhost:4950/ui manually
+### Step 3 – Generate a Lever plan
+Plans describe which Lever postings to open.
+```powershell
+# Browser-Use discovery (collects SERP HTML and dedupes results)
+python app.py apply plan --source lever-google --browser-discovery \
+  | Out-File lever-plan.json -Encoding utf8
+
+# Programmable Search (no browser) when GOOGLE_CSE_* is configured
+python app.py apply plan --source lever-google --programmable-search \
+  | Out-File lever-plan.json -Encoding utf8
+
+# Override search terms/location/pages directly
+python app.py apply plan --source lever-google --terms "react front end" --location "remote us" --pages 2 \
+  | Out-File lever-plan.json -Encoding utf8
+```
+Important notes:
+- Logs now stream to **stderr**, so the JSON captured by `Out-File` or redirection is clean.
+- Plan artifacts (SERP HTML, guardrail domains, deduped results) are stored under `runs/<runId>/plan/` when Browser-Use runs.
+
+### Step 4 – Run Lever review automation
+```powershell
+python app.py apply run --plan lever-plan.json --limit 5 --profile frontend-dev --mode review --dry-run
+```
+What happens:
+- A run directory `runs/<runId>/` is created.
+- Each candidate gets a subfolder with HTML snapshots, form plan, summary, resume telemetry, and screenshot.
+- `queue.json` tracks candidate state (`discovered → planned → awaiting_decision`).
+- Console output logs queue transitions and summary counts.
+
+### Step 5 – Review candidates in the preview UI
+The preview server must load the same run id you just generated. The quickest way today is to launch the preview runner with that run record:
+```powershell
+$runId = "20250930-045625-0805f893"  # replace with your run id
+python - <<'PY'
+from __future__ import annotations
+import json
+from datetime import datetime
+from pathlib import Path
+from apps.cli.config_loader import Settings, get_base_dir
+from apps.cli.run_store import RunStore, RunRecord
+from apps.preview.runner import run_preview_service
+
+RUN_ID = "${runId}"
+base = get_base_dir()
+run_dir = base / "runs" / RUN_ID
+payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+started_at = datetime.fromisoformat(payload["startedAt"].replace("Z", "+00:00"))
+record = RunRecord(
+    id=RUN_ID,
+    started_at=started_at,
+    run_dir=run_dir,
+    run_json_path=run_dir / "run.json",
+    logs_path=run_dir / "actions.log",
+    profile_id=payload.get("profileId"),
+    screenshot_path=None,
+)
+settings = Settings.load()
+run_preview_service(
+    settings,
+    demo=False,
+    open_browser=True,
+    run_record=record,
+    run_store=RunStore(base=base),
+)
+PY
+```
+Or copy/paste a single-line alternative (replace the run id):
+```powershell
+python -c "import json; from datetime import datetime; from apps.cli.config_loader import Settings, get_base_dir; from apps.cli.run_store import RunStore, RunRecord; from apps.preview.runner import run_preview_service; RUN_ID='20250930-045625-0805f893'; base=get_base_dir(); run_dir=base/'runs'/RUN_ID; payload=json.loads((run_dir/'run.json').read_text(encoding='utf-8')); started_at=datetime.fromisoformat(payload['startedAt'].replace('Z','+00:00')); record=RunRecord(id=RUN_ID, started_at=started_at, run_dir=run_dir, run_json_path=run_dir/'run.json', logs_path=run_dir/'actions.log', profile_id=payload.get('profileId'), screenshot_path=None); settings=Settings.load(); run_preview_service(settings, demo=False, open_browser=True, run_record=record, run_store=RunStore(base=base))"
+```
+Once the preview UI opens:
+- The queue drawer lists all `pending` / `escalated` candidates.
+- Keyboard shortcuts: `Shift+A` approve, `Shift+X` escalate, `J/K` navigate, `Shift+?` toggle legend.
+- Decisions update `queue.json` (`decided` array) and stamp the candidate payload under `runs/<runId>/lever/<candidateId>/`.
+
+You can always inspect `runs/<runId>/queue.json` manually if you only need the data.
+
+### Step 6 – Explore the dry-run demo
+Use this when you just want the preview experience without real automation:
+```powershell
+python app.py apply demo --dry-run --limit 1       # opens Chrome app mode by default
 python app.py apply demo --dry-run --limit 1 --no-browser
-
-# Restart an existing preview without provisioning a new run directory
-python app.py preview demo
+python app.py preview demo                        # reopen the last demo run
 ```
+Demo runs seed placeholder artifacts, redacted `actions.log` lines, and append to `history/history.jsonl`.
 
-Approving, aborting, or editing from the UI persists decisions to `runs/<id>/run.json`, appends entries to `actions.log`, and records redacted history events under `history/history.jsonl`. Guardrail log lines (e.g., `guardrail.demo.no_network`) confirm no Browser-Use automation or external SimplyHired calls occur during the demo.
+---
 
-### Sample Demo Artifacts
-Running `python app.py apply demo --dry-run --limit 1` creates a run folder similar to:
+## Command Reference
 
-```json
-{
-  "run_id": "20240926-120000-abcdef12",
-  "actions_log": "runs/20240926-120000-abcdef12/actions.log"
-}
-```
+### `python app.py apply ...`
+| Command | Purpose | Notes |
+| --- | --- | --- |
+| `apply demo` | Provision a demo run, launch preview UI | `--limit`, `--no-browser` available |
+| `apply plan` | Emit Lever discovery plan JSON | `--browser-discovery`, `--programmable-search`, `--terms`, `--location`, `--pages`, CSE overrides |
+| `apply run` | Execute Lever automation using a plan | `--plan`, `--profile`, `--limit`, `--mode review`, `--dry-run` |
+| `apply open` | Launch Browser-Use session for a SimplyHired search | Accepts `--profile`, `--model`, `--session-backups/--no-session-backups` |
 
-`actions.log` entries are newline-delimited JSON with automatic PII masking:
+### `python app.py profiles ...`
+- `profiles new <id>` – scaffold YAML + folders.
+- `profiles validate <id>` – enforce schema & resume presence.
+- `profiles use <id>` – mark profile active.
+- `profiles current` – print active profile and overrides.
+- `profiles list` – list all profiles with validation status.
 
-```json
-{"event":"run.demo_initialized","level":"info","message":"Demo run directory prepared with redacted logging.","runId":"20240926-120000-abcdef12","timestamp":"2024-09-26T12:00:00Z"}
-```
+### `python app.py config ...`
+- `config init` – create `config/config.yaml` with documented defaults.
+- `config show` – render effective settings in JSON (CLI overrides > profile > global).
 
-`history/history.jsonl` receives a matching redacted record:
+### `python app.py history ...`
+- `history path` – print the absolute `history/` directory.
 
-```json
-{"fingerprint":"20240926-120000-abcdef12","id":"20240926-120000-abcdef12","postingUrl":"demo://placeholder","profileId":"","runPath":"runs/20240926-120000-abcdef12","status":"demo","summary":"Demo run initialized; actions.log will contain redacted events.","timestamp":"2024-09-26T12:00:00Z"}
-```
+### Preview runner helper
+There is no dedicated CLI command yet for “load an existing run”. Use the Python snippet from [Step 5](#step-5--review-candidates-in-the-preview-ui) to bind the preview server to a stored run id.
 
-## Testing
+---
 
-The queue persistence and preview API suites require both FastAPI and HTTPX. Install the editable project (or the `dev` extra) before running pytest so these dependencies are available:
-
-```bash
-pip install -e .[dev]
-pytest apps/cli/tests/test_queue_manager.py
-pytest apps/preview/tests/test_queue_endpoints.py
-pytest sites/lever/tests/test_lever_queue_restart.py
-pnpm --filter @app/ui test
-```
-
-If you prefer a minimal install, include `fastapi` and `httpx` alongside `pytest` as shown in the setup section above.
-
-## Browser‑Use 0.7.x Notes
-- Event‑driven lifecycle: we adapt Browser‑Use’s async `BrowserSession` to synchronous CLI primitives. On launch we wait for `BrowserConnectedEvent`/focus; if the browser opens on `chrome://newtab` or Google, we issue a CDP `Page.navigate` fallback to your target URL.
-- Locale/timezone: now applied via env (`LANG`/`LC_ALL`/`TZ`), `Accept-Language`, and Chrome `--lang`. Deprecated `locale`/`timezone_id` kwargs are not used.
-- Readiness selectors: SimplyHired SERP support includes a 2025 variant using `data-testid` to match current markup.
-- Session backups: live runs default to backups disabled (override with `--session-backups`); when enabled, cache/lock files are skipped to avoid permissions noise.
-- Windows console UTF‑8: the CLI configures stdout/stderr for UTF‑8 to avoid emoji logging crashes; you can also set `PYTHONIOENCODING=utf-8`.
-- Docs: see https://docs.browser-use.com/introduction and https://docs.browser-use.com/changelog for upstream updates.
-
-### Environment Variables
-Create `.env.local` at repo root (optional):
+## Environment Variables & Logging
+Add these (optional) to `.env.local`:
 ```env
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=deepseek/deepseek-chat-v3.1:free
-GOOGLE_CSE_KEY=...        # optional: Google Programmable Search API key
-GOOGLE_CSE_CX=...         # optional: Programmable Search engine id
+GOOGLE_CSE_KEY=...                       # Programmable Search (optional)
+GOOGLE_CSE_CX=...                        # Programmable Search (optional)
+BROWSER_USE_SETUP_LOGGING=false          # keep Browser-Use logs off stdout; CLI sets this by default
 ```
-The app logs a JSON warning if `.env.local` is missing and continues. When Programmable Search credentials are present the CLI
-can use `--programmable-search` to call Google’s Custom Search API without launching Browser-Use.
+Key logging behaviors:
+- CLI structured events are redacted and now written to **stderr** (`apps/cli/utils.log_event`).
+- Browser-Use `setup_logging` is disabled by default (`BROWSER_USE_SETUP_LOGGING=false`) so third-party warnings do not contaminate JSON streams.
+- `runs/<runId>/actions.log` is newline-delimited JSON with the same redaction applied.
 
-### Profiles
-```bash
-# Generate a new profile template (fills placeholders, does not overwrite unless --force)
-python app.py profiles new frontend-dev
+---
 
-# Fill in the YAML and add a resume at data/resumes/frontend-dev/resume.pdf, then validate
-python app.py profiles validate frontend-dev
+## Troubleshooting
+| Symptom | Likely Cause | Fix |
+| --- | --- | --- |
+| Plan command writes “Plan file is not valid JSON” | Mixing stdout/stderr in your redirect with older commits | Update to this commit (logs now use stderr) and re-run `apply plan` with `Out-File` or `>` |
+| Preview UI shows empty queue after `apply run` | Preview server is still on a demo run id | Stop the demo server and relaunch preview using the run id from `apply run` (see [Step 5](#step-5--review-candidates-in-the-preview-ui)) |
+| Browser-Use fails to launch | Missing profile validation or Chrome path | Run `profiles validate`, check `profiles current`, set `chrome_path` in `config/config.yaml` if needed |
+| Resume upload reports `UPLOAD_FAILED` | Missing resume or selector mismatch | Confirm resume path in `data/resumes/<id>/`, inspect `runs/<runId>/lever/<candidateId>/resume-upload.json` |
+| `pip install -e .` fails | Editable installs not supported on your Python build | Install minimal deps manually (see [Installation](#installation)) |
 
-# Persist the active profile for this machine and inspect its status
-python app.py profiles use frontend-dev
-python app.py profiles current
+---
 
-# View all profiles with validity and resume status
-python app.py profiles list
-```
+## Release Highlights
+- **4.3** – Preview UI queue drawer, keyboard shortcuts (`Shift+A`, `Shift+X`, `J/K`, `Shift+?`), optimistic updates, manual override log, RTL test coverage.
+- **4.1.6** – `apply plan --browser-discovery` enriches plans with SERP artifacts; Programmable Search mode; guardrail updates for Google domains.
+- **3.3** – `apply open` replays stored SimplyHired form plans; `FormFillExecutor` + `ProfileAnswerResolver` telemetry; `formFill` persistence.
+- **3.1.5** – Browser-Use 0.7.x adapter, CDP navigation fallback, locale/timezone alignment, session backup controls, UTF-8 console handling.
 
-`profiles current` returns the resolved session directory, resume presence, and browser overrides so you can confirm bindings before launching Browser-Use. Validation now surfaces actionable JSON errors (`profiles.validation_failed`) when the resume is missing or schema checks fail.
+---
 
-> **Upgrading from earlier commits?** Create folders under `data/resumes/<id>/` and move your existing resumes there before running `profiles validate`.
-
-### Browser-Use Session Bootstrap
-Use the new `apply open` command to launch Browser-Use in headful Chrome with profile-bound persistence:
-
-> **Release Notes & Docs:** The automation targets Browser-Use 0.7.9. Bookmark the official [introduction](https://docs.browser-use.com/introduction) and [changelog](https://docs.browser-use.com/changelog) so you can track breaking CDP or event lifecycle changes before updating selector heuristics.
-
-```bash
-# Launch a dry-run Browser-Use session for the active profile
-python app.py apply open "https://www.simplyhired.com/search?q=python&l=remote"
-
-# Override the profile and Browser-Use model for this invocation
-python app.py apply open "https://www.simplyhired.com/search?q=python" \
-  --profile frontend-dev \
-  --model deepseek/deepseek-r1:free
-```
-
-The command resolves the Chrome `user_data_dir` to `.local/browser/profiles/<profile>`, honors overrides from `config/config.yaml` or `data/profiles/<id>.yaml`, and returns a JSON payload with the session identifier plus a `profile` object describing the active binding (resume path, QA overrides, guardrails). If the selected profile fails validation or the resume PDF is missing, the CLI exits with `profiles.validation_failed` before launching Chrome. Dry-run mode continues to fall back to the `demo` profile only when no active profile is configured.
-
-After the search readiness check succeeds the CLI now snapshots the resolved session directory to `.local/browser/backups/<profile>/` and records the result under the `backups` key in the JSON response. Restores run automatically when Chrome launch detects a corrupted profile (e.g., missing `Preferences`), retrying exactly once before surfacing an error. Operators can opt out per run with `--session-backups/--no-session-backups` or by setting `browser_session_backups.enabled` in the global/profile config files. Run metadata (`runs/<id>/run.json`) keeps the same `sessionBackup` structure so history tooling can inspect the latest snapshot and any restore attempts.
-
-### Lever Plan Discovery Modes
-- `python app.py apply plan --browser-discovery` launches Browser-Use for each SERP URL in the generated plan, saves the raw HTML
-  under `runs/<id>/plan/serp-page-*.html`, and populates the emitted JSON with unique Lever results. Guardrails expand to include
-  `www.google.com`, `*.google.com`, and `consent.google.com` alongside the existing Lever allowlist.
-- `--programmable-search` prefers Google’s Programmable Search JSON API when `GOOGLE_CSE_KEY`/`GOOGLE_CSE_CX` (or the CLI
-  overrides `--google-cse-key/--google-cse-cx`) are provided. This mode avoids launching Chrome and still emits the enriched
-  `results` array.
-- If both toggles are supplied, Programmable Search takes precedence; omitting both preserves the original headless HTTP fetch
-  behaviour from Story 4.0.
-
-#### Stealth Guardrails & Pacing
-- **Domain allowlist** – navigation is limited to the configured domains (`browser.allowed_domains`). Profile YAML can append additional domains per-identity.
-- **Single-tab enforcement** – attempts to spawn a new tab/window are blocked and logged as `guardrail.browser.NEW_TAB_ATTEMPT` events.
-- **Human pacing defaults** – each action injects jittered waits (100–600 ms) and optional think-time ranges (1–2 s) before critical interactions. Tweak via `browser.pacing.wait_jitter_ms` and `browser.pacing.think_time_range_s` in `config/config.yaml`, CLI overrides (`--browser.allowed_domains`, `--browser.pacing.*`), or profile overrides.
-
-#### Form Fill Execution (Story 3.3)
-- After discovery produces a `FormFillPlan`, the CLI resolves answers through `ProfileAnswerResolver`, which merges profile YAML
-  fields, QA overrides, and derived values (e.g., formatted phone, LinkedIn URL). Missing data results in `FIELD_SKIPPED`
-  telemetry with structured reasons instead of placeholder text.
-- `FormFillExecutor` issues high-level controller actions (`focus`, `fill_text`, `set_select_value`, `set_radio_value`,
-  `set_checkbox_state`) with guardrail pacing and a single retry for transient failures. Every attempt emits redacted
-  `FIELD_FILL_STARTED`, `FIELD_FILLED`, `FIELD_SKIPPED`, and `FIELD_RETRY` events.
-- Required widgets are validated post-fill via `get_field_state`; empty inputs log `FIELD_VALIDATION_FAILED` warnings and are
-  surfaced in the CLI summary table.
-- Completed runs persist a `formFill` payload alongside discovery/mapping artifacts in `runs/<id>/run.json` and append a
-  matching history entry so review tooling can track filled vs skipped counts over time.
-- **Structured telemetry** – navigation, tab suppression, pacing waits, and think-time pauses stream through the `log_event` pipeline so `actions.log` and downstream tooling can observe guardrail posture.
-
-#### Resume Upload (Story 3.4)
-- `BrowserUseController.upload_file` triggers the Playwright file chooser deterministically, redacts file metadata (name,
-  size, SHA-256), and emits `UPLOAD_STARTED`/`UPLOAD_COMPLETED`/`UPLOAD_FAILED` events. Dry-run mode simulates the chooser
-  without touching disk while still exercising telemetry paths.
-- `ResumeUploader` validates the configured profile resume, invokes the controller primitive, confirms DOM attachment via
-  `get_field_state(..., widget_type="file")`, and retries once with guardrail jitter before capturing an HTML artifact on
-  persistent failure.
-- Successful runs append a `resumeUpload` block to `runs/<id>/run.json`, record a history entry, and print a one-line CLI
-  summary (status, attempt count, simulated flag). Failures write redacted diagnostics plus an HTML snapshot to
-  `runs/<id>/resume/` for QA review.
-
-### Tests
-```bash
+## Testing
+Ensure you installed the `dev` extras (or FastAPI/HTTPX manually), then:
+```powershell
 pytest -q
+pytest apps/preview/tests/test_queue_endpoints.py
+pytest sites/lever/tests/test_lever_queue_restart.py
 pnpm --filter @app/ui test -- --runInBand
 ```
 
+---
+
 ## Project Structure
-See `docs/architecture/unified-project-structure.md`. Current key paths:
 ```
-app.py                         # root entry that delegates to Typer app
-apps/cli/                      # CLI implementation
-core/tests/                    # pytest tests for CLI/config
-config/                        # generated config.yaml (gitignored)
-.local/, runs/, history/       # runtime artifacts (gitignored)
+app.py                         # CLI entry point
+apps/cli/                      # Typer commands, run store, queue manager
+apps/preview/                  # FastAPI preview server + runner helpers
+apps/ui/                       # React preview UI (Vite build)
+data/profiles/, data/resumes/  # Profile YAML + resumes
+runs/, history/, .local/       # Runtime artifacts (gitignored)
+docs/                          # Architecture, PRD, story docs
 ```
 
-## Roadmap (from PRD)
-- 1.2 Preview Server Skeleton (FastAPI on :4950, Chrome app-mode)
-- 1.3 Profiles schema & commands
-- 1.4 Run store & redacted logging
-- 1.5 Dry-run demo flow end-to-end
-
-## Development Notes
-- JSON logs to stdout; avoid string exceptions
-- Contracts align with `docs/architecture/api-specification-rest.md`
-- Testing guidance in `docs/architecture/testing-strategy.md`
-
-## Repo Hygiene
-- `.gitignore` excludes local artifacts, logs, and build outputs
-- `.gitattributes` uses `text=auto` and sets LF for Unix scripts and CRLF for Windows scripts; marks assets as binary; excludes local artifacts from archives
+---
 
 ## Contributing
-This project uses a story-driven workflow. See `docs/prd/epic-1-foundation-review-ui.md` and `docs/stories/`.
+The project follows a story-driven workflow. See `docs/prd/epic-1-foundation-review-ui.md` and the individual `docs/stories/*.md` files for acceptance criteria and implementation notes.
 
-## License
-TBD
+License: TBD
