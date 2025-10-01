@@ -131,6 +131,8 @@ export interface RunRecord {
 }
 ```
 
+- `artifacts.answers.summary` records the Markdown digest for drafted answers (hashes + confidence only).
+
 ```ts
 export interface AnswerOutcomeRecord {
   fieldId: string;
@@ -142,6 +144,7 @@ export interface AnswerOutcomeRecord {
   draftedAt: string;
   latencyMs?: number;
   fallbackReason?: "validation_failed" | "low_confidence" | "timeout" | "provider_error";
+  artifactPath: string;
 }
 ```
 

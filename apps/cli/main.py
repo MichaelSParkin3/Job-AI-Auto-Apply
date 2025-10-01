@@ -68,6 +68,12 @@ from core.autofill.planner import (
     AutofillPlannerOrchestrator,
     OpenRouterPlannerClient,
 )
+from core.answers import (
+    AnswerCache,
+    AnswerOrchestrator,
+    AnswerRequest,
+    OpenRouterDraftClient,
+)
 from sites.lever.form_executor import LeverFormExecutor, LeverFormPlanner
 from sites.lever.lever_google_discovery import LeverGoogleDiscovery, LeverSerpResult
 from sites.lever.navigation import LeverNavigator
@@ -987,6 +993,23 @@ def apply_run(
         "--plan-llm/--no-plan-llm",
         help="Enable or disable LLM enrichment for Lever form planning.",
     ),
+    no_answer_llm: bool = typer.Option(
+        False,
+        "--no-answer-llm",
+        help="Disable LLM fallback when drafting missing answers.",
+    ),
+    min_answer_confidence: Optional[float] = typer.Option(
+        None,
+        "--min-answer-confidence",
+        min=0.0,
+        max=1.0,
+        help="Override minimum confidence for drafted answers (0-1).",
+    ),
+    answer_model: Optional[str] = typer.Option(
+        None,
+        "--answer-model",
+        help="Override model used for LLM answer drafting.",
+    ),
 ) -> str | None:
     """Execute Lever apply automation end-to-end and populate the review queue."""
 
@@ -1013,6 +1036,12 @@ def apply_run(
         overrides["plan.model"] = plan_model
     if plan_llm is not None:
         overrides["plan.llm_enabled"] = plan_llm
+    if no_answer_llm:
+        overrides["automation.answerPolicies.allowLLMFallback"] = False
+    if min_answer_confidence is not None:
+        overrides["automation.answerPolicies.minConfidence"] = min_answer_confidence
+    if answer_model:
+        overrides["automation.answerPolicies.model"] = answer_model
 
     settings = Settings.load(overrides=overrides)
     base = get_base_dir()
@@ -1037,6 +1066,28 @@ def apply_run(
         profile_config = service.load_profile(profile_id)
     except (FileNotFoundError, ValueError):
         profile_config = None
+
+    answer_policy = settings.base_answer_policy()
+    if profile_config is not None:
+        overrides_map = {}
+        if hasattr(profile_config, "answer_policy_overrides"):
+            try:
+                overrides_map = profile_config.answer_policy_overrides()
+            except Exception:  # pragma: no cover - defensive profile stub guard
+                overrides_map = {}
+        if overrides_map:
+            payload = answer_policy.model_dump()
+            if "enabled" in overrides_map:
+                payload["enabled"] = overrides_map["enabled"]
+            if "minConfidence" in overrides_map:
+                payload["min_confidence"] = overrides_map["minConfidence"]
+            if "allowSaveToProfile" in overrides_map:
+                payload["allow_save_to_profile"] = overrides_map["allowSaveToProfile"]
+            if "allowLLMFallback" in overrides_map:
+                payload["allow_llm_fallback"] = overrides_map["allowLLMFallback"]
+            if overrides_map.get("model"):
+                payload["model"] = overrides_map["model"]
+            answer_policy = answer_policy.__class__(**payload)
 
     plan_payload: dict[str, Any]
     if plan is not None:
@@ -1242,6 +1293,38 @@ def apply_run(
         run_store=run_store,
         run_record=run_record,
         mode=mode,
+    )
+    run_store.record_answer_policy(run_record, answer_policy.model_dump())
+
+    answer_cache = AnswerCache()
+    draft_client = None
+    if (
+        answer_policy.enabled
+        and answer_policy.allow_llm_fallback
+        and settings.OPENROUTER_API_KEY
+    ):
+        try:
+            draft_client = OpenRouterDraftClient(
+                api_key=settings.OPENROUTER_API_KEY,
+                model=answer_policy.model,
+            )
+        except Exception as exc:  # pragma: no cover - telemetry guard
+            log_event(
+                {
+                    "level": "warning",
+                    "event": "answers.draft_client_unavailable",
+                    "error": str(exc),
+                }
+            )
+            draft_client = None
+
+    answer_orchestrator = AnswerOrchestrator(
+        run_id=run_record.id,
+        run_dir=run_record.run_dir,
+        policy=answer_policy,
+        cache=answer_cache,
+        draft_client=draft_client,
+        telemetry_callback=log_event,
     )
     processed = 0
 
@@ -1487,6 +1570,33 @@ def apply_run(
                 resume_selector=plan_result.resume_selector,
                 llm_used=enriched_plan_result.llm_used,
             )
+            for field in autofill_fields:
+                metadata = field.metadata or {}
+                validation = metadata.get("validation") if isinstance(metadata, Mapping) else {}
+                if not isinstance(validation, Mapping):
+                    validation = {}
+                request = AnswerRequest(
+                    run_id=run_record.id,
+                    field_id=field.value_key,
+                    question=field.label,
+                    field_type=field.field_type or "text",
+                    validation=dict(validation),
+                    profile_value=answers.get(field.value_key),
+                    resume_value=None,
+                    resume_snippet=None,
+                    profile_snippet=None,
+                    locale=settings.browser_locale,
+                    timezone=settings.browser_timezone,
+                )
+                outcome = answer_orchestrator.draft_answer(request)
+                if outcome.value is not None:
+                    answers[field.value_key] = outcome.value
+                answer_metadata.setdefault(field.value_key, {})[
+                    "orchestratorSource"
+                ] = outcome.source.value
+                if outcome.confidence is not None:
+                    answer_metadata[field.value_key]["confidence"] = outcome.confidence
+
             autofill_executor = AutofillExecutor(
                 controller=controller,
                 run_dir=run_record.run_dir,
@@ -1683,12 +1793,6 @@ def apply_open(
         except ApiError as error:
             typer.secho(error.to_json(), fg=typer.colors.RED)
             raise typer.Exit(code=1)
-
-    profile_config = None
-    try:
-        profile_config = service.load_profile(profile_id)
-    except (FileNotFoundError, ValueError):
-        profile_config = None
 
     browser_overrides: dict[str, Any] = dict(binding.browser_overrides)
     user_data_dir = binding.user_data_dir

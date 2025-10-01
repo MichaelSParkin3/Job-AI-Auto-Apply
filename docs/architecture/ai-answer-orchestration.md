@@ -40,6 +40,8 @@ sequenceDiagram
   3. Cached run answers (`source="cached"`).
   4. LLM draft via `AnswerDraftClient` (`source="llm"`).
 - Persists provenance to `run.json.answers[]` and writes answer artifacts under `runs/<runId>/answers/`.
+- `AnswerCache` keeps per-run outcomes and exposes a `record_feedback` stub for Story 5.4 integration.
+- Telemetry is emitted through `log_event` hooks so CLI/demo runs pick up `AI_FIELD_*` events automatically.
 
 ### AnswerDraftRequest
 ```python
@@ -73,8 +75,9 @@ class AnswerDraftResponse(BaseModel):
 
 ### Run Artifacts
 - `runs/<id>/answers/<fieldId>.json`: `{valueHash, source, confidence, rationaleDigest, provider}`
-- `runs/<id>/answers/<fieldId>.md`: reviewer summary, hashed value lengths, rationale snippet.
+- `runs/<id>/answers/<fieldId>.md`: reviewer summary, hashed value lengths, rationale digest, latency, and token usage.
 - `runs/<id>/answers/summary.md`: aggregated run-level overview for preview UI.
+- `run.json.answers[]` records `artifactPath` _and_ `markdownPath` for every drafted field so the preview API can deep-link to the sanitized markdown artifact. `run.json.artifacts.answers.fields` mirrors the map for quick lookup.
 
 ## Preview & API Integration
 - Preview API will expose endpoints (`POST /api/run/{id}/answers/{fieldId}/apply|save|edit|reject`) returning `AnswerOutcome` with reviewer decision metadata.
@@ -93,6 +96,8 @@ automation:
 ```
 - CLI flags override: `--no-answer-llm`, `--min-answer-confidence`, `--answer-model`.
 - Site defaults: `sites/lever/config.yaml` adds `answers.default_policy` with selectors for classification (field type hints).
+- Profile YAMLs can override these policies under `automation.answerPolicies` and the resolved policy snapshot is persisted to each `run.json`.
+- `Settings.base_answer_policy()` centralises default resolution so other entry points can reuse the policy without duplicating parsing logic.
 
 ## Security & Privacy
 - Prompt builder enforces:
@@ -107,6 +112,7 @@ automation:
 - Integration tests ensure orchestrator wiring within `AutofillExecutor` respects resume-first workflow and updates telemetry/artifacts.
 - Contract fixtures recorded under `core/tests/fixtures/lever/answers/` support deterministic regression across Lever variants.
 - QA scripts validate that saved prompts omit PII and that reviewer approvals update profile provenance correctly.
+- New pytest suites: `core/tests/test_answer_orchestrator.py` (precedence & success path) and `core/tests/test_answer_orchestrator_llm.py` (failure & timeout).
 
 ## Dependencies & Follow-Up
 - Story 5.4 consumes `AnswerOrchestrator.record_feedback` to sync reviewer edits back to cached answers.

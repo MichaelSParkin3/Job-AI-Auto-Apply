@@ -471,6 +471,27 @@ class ProfileConfig(BaseModel):
         alias="session_backups",
         description="Session backup overrides",
     )
+    class AnswerPoliciesConfig(BaseModel):
+        enabled: bool | None = Field(default=None, alias="enabled")
+        min_confidence: float | None = Field(default=None, alias="minConfidence")
+        allow_save_to_profile: bool | None = Field(
+            default=None, alias="allowSaveToProfile"
+        )
+        allow_llm_fallback: bool | None = Field(
+            default=None, alias="allowLLMFallback"
+        )
+        model: str | None = Field(default=None, alias="model")
+
+        model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    class AutomationConfig(BaseModel):
+        answer_policies: AnswerPoliciesConfig | None = Field(
+            default=None, alias="answerPolicies"
+        )
+
+        model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    automation: AutomationConfig | None = Field(default=None, alias="automation")
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
@@ -517,6 +538,25 @@ class ProfileConfig(BaseModel):
         if not directory.is_absolute():
             directory = (base / directory).resolve()
         return directory
+
+    def answer_policy_overrides(self) -> Dict[str, Any]:
+        """Return non-null answer policy overrides defined on the profile."""
+
+        overrides: Dict[str, Any] = {}
+        if not self.automation or not self.automation.answer_policies:
+            return overrides
+        policies = self.automation.answer_policies
+        if policies.enabled is not None:
+            overrides["enabled"] = bool(policies.enabled)
+        if policies.min_confidence is not None:
+            overrides["minConfidence"] = float(policies.min_confidence)
+        if policies.allow_save_to_profile is not None:
+            overrides["allowSaveToProfile"] = bool(policies.allow_save_to_profile)
+        if policies.allow_llm_fallback is not None:
+            overrides["allowLLMFallback"] = bool(policies.allow_llm_fallback)
+        if policies.model:
+            overrides["model"] = str(policies.model)
+        return overrides
 
     def resolved_browser_overrides(self) -> Dict[str, Any]:
         """Return normalized browser overrides for CLI/config merging."""

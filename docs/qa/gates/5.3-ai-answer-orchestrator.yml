@@ -1,8 +1,8 @@
 id: 5.3-ai-answer-orchestrator
 name: AI Answer Orchestrator & Drafting Pipeline
-status: draft
+status: ready
 owner: QA (Test Architect)
-last_updated: 2025-12-21
+last_updated: 2025-01-15
 preconditions:
   - Story 5.1 planner telemetry fixtures available
   - Story 5.2 headful executor + resume-first ordering deployed

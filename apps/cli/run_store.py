@@ -750,6 +750,18 @@ class RunStore:
         self._write_run_json(record.run_json_path, payload)
         return entry
 
+    def record_answer_policy(
+        self, record: RunRecord, policy: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Persist the resolved answer policy for the run."""
+
+        payload = self._load_run_json(record.run_json_path)
+        payload["answerPolicy"] = json.loads(
+            json.dumps(policy, ensure_ascii=False)
+        )
+        self._write_run_json(record.run_json_path, payload)
+        return payload["answerPolicy"]
+
     def upsert_lever_candidate(
         self, record: RunRecord, candidate_id: str, payload: Mapping[str, Any]
     ) -> Dict[str, Any]:

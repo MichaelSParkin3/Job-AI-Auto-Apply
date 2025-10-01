@@ -156,6 +156,7 @@ python app.py apply demo --dry-run --limit 1 --no-browser
 python app.py preview demo                        # reopen the last demo run
 ```
 Demo runs seed placeholder artifacts, redacted `actions.log` lines, and append to `history/history.jsonl`.
+AI autofill runs additionally persist drafted answer artifacts under `runs/<runId>/answers/` with hashed values for reviewer audits.
 
 ---
 ## Command Reference
@@ -165,7 +166,7 @@ Demo runs seed placeholder artifacts, redacted `actions.log` lines, and append t
 | --- | --- | --- |
 | `apply demo` | Provision a demo run, launch preview UI | `--limit`, `--no-browser` available |
 | `apply plan` | Emit Lever discovery plan JSON | `--browser-discovery`, `--programmable-search`, `--terms`, `--location`, `--pages`, CSE overrides |
-| `apply run` | Execute Lever automation using a plan | `--plan`, `--profile`, `--limit`, `--mode review`, `--dry-run`, `--plan-model`, `--plan-llm/--no-plan-llm` |
+| `apply run` | Execute Lever automation using a plan | `--plan`, `--profile`, `--limit`, `--mode review`, `--dry-run`, `--plan-model`, `--plan-llm/--no-plan-llm`, `--answer-model`, `--no-answer-llm`, `--min-answer-confidence` |
 | `apply queue` | Manually reassign queue candidates between human/AI lanes | `--action escalate|assign-ai`, `--reason` (optional context) |
 | `apply open` | Launch Browser-Use session for a SimplyHired search | Accepts `--profile`, `--model`, `--session-backups/--no-session-backups` |
 
