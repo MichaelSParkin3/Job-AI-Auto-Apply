@@ -26,6 +26,9 @@
 - FR23: Load OpenRouter API keys from `.env.local`; default model `deepseek/deepseek-chat-v3.1:free`; allow overrides per profile/CLI.
 - FR24: Implement deduplication (fingerprint = `posting_url + sha256(job_description_full)`); allow re-apply after 30 days.
 - FR25: Enforce guardrails (domain restriction, default `--limit 2`, manual login persistence) to reduce risk and brittleness.
+- FR26: When generating form fills, resolve each field through an answer orchestrator that prioritizes saved profile responses, deterministic overrides, resume-derived hints, and finally LLM-drafted answers with confidence and rationale metadata.
+- FR27: Preview UI must present drafted answers with confidence bars and actions (approve, approve & save, edit, edit & save) that feed reviewer decisions back to the orchestrator and respect profile-configured confidence thresholds.
+- FR28: Approved or edited answers saved to profile persist provenance (`source`, `confidence`, `lastReviewedAt`, `reviewerId?`) and maintain historical versions so future runs can reuse trusted responses without losing audit history.
 
 ## Non-Functional (NFR)
 - NFR1: Privacy — All PII and artifacts remain local; no cloud storage of user data.

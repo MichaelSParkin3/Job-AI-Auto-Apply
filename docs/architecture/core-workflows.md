@@ -1,4 +1,4 @@
-﻿# Core Workflows
+# Core Workflows
 
 ```mermaid
 sequenceDiagram
@@ -21,16 +21,44 @@ sequenceDiagram
 ```
 ```
 
-- **Session resilience** â€” after the readiness sequence returns `ready`, the CLI spawns a background copy of the resolved Chrome profile into `.local/browser/backups/<profile>/` and records the outcome in both the console payload (`backups.*`) and `runs/<id>/run.json`. If a subsequent launch detects a corrupt session (missing `Preferences`, launch error) the CLI restores the latest snapshot once before surfacing a fatal error. Operators can disable this behaviour per-run or per-profile when ephemeral sessions are desired.
+- **Session resilience** — after the readiness sequence returns `ready`, the CLI spawns a background copy of the resolved Chrome profile into `.local/browser/backups/<profile>/` and records the outcome in both the console payload (`backups.*`) and `runs/<id>/run.json`. If a subsequent launch detects a corrupt session (missing `Preferences`, launch error) the CLI restores the latest snapshot once before surfacing a fatal error. Operators can disable this behaviour per-run or per-profile when ephemeral sessions are desired.
+
+## AI Answer Orchestration & Review Loop
+
+```mermaid
+sequenceDiagram
+  participant Prof as Profile Store
+  participant Or as AnswerOrchestrator
+  participant Plan as Lever Plan Builder
+  participant Exec as AutoFill Executor
+  participant API as Preview API
+  participant UI as Preview UI
+
+  Plan->>Or: resolve(field, candidateId)
+  Or->>Prof: fetch saved answers + policies
+  Or-->>Or: derive resume highlights & deterministic overrides
+  Or->>Or: LLM draft (if needed)
+  Or-->>Plan: DraftAnswer { value, confidence, rationale, source }
+  Exec->>API: enqueue candidate w/ draftAnswers[]
+  API->>UI: deliver queue snapshot + drafts
+  UI->>API: reviewer decision (approve/edit/save)
+  API->>Or: update cache + telemetry
+  API->>Prof: persist saved answers (when requested)
+  Exec->>Exec: consume approved/edit values during autofill
+```
+
+- **Confidence policies** originate from global/profile config; drafts below threshold flag the candidate as human-required and block auto submission.
+- **Reviewer actions** call `POST /api/queue/{runId}/candidate/{candidateId}/answers/{fieldKey}/decision`, returning updated `draftAnswer` payloads and refreshed queue timestamps.
+- **Profile persistence** records provenance (`source`, `confidence`, `reviewerId`, `history[]`) so future runs reuse validated answers and analytics can track approval/edit rates.
 
 ## Run Modes & Decision Flow
 
-- **Mode selection** happens before the Browser-Use session launches. The CLI resolves `mode` from CLI flag â†’ profile override â†’ global config and records it in `run.json` so the preview UI and history know which guardrails to enforce. `ai_autofill` uses the same guardrails as `review` but enables LLM-driven fill + submit attempts.
+- **Mode selection** happens before the Browser-Use session launches. The CLI resolves `mode` from CLI flag → profile override → global config and records it in `run.json` so the preview UI and history know which guardrails to enforce. `ai_autofill` uses the same guardrails as `review` but enables LLM-driven fill + submit attempts.
 - **Decision engines** share a `SubmissionDecision` contract (`{ outcome: approve|edit_request|abort|needs_review, confidence, rationale, nextActions[] }`).
   - `HumanDecisionEngine` subscribes to preview UI events; the queue pauses while waiting for a person to respond.
   - `LLMDecisionEngine` consumes queue entries asynchronously, scoring each candidate and auto-resolving when confidence â‰¥ threshold, otherwise returning `needs_review` to fall back to the human queue.
   - `AutoFillOrchestrator` replays Browser-Use steps and submit attempts; it emits `AUTOFILL_*` telemetry and packages `handoff_pending` snapshots when blockers appear.
-- **Queue states** evolve deterministically: `discovered â†’ planned â†’ awaiting_decision â†’ (handoff_pending)? â†’ decided â†’ submitted|shelved`. Queue snapshots are persisted to `run.json.decisions[]` so auto-mode runs can be audited after the fact.
+- **Queue states** evolve deterministically: `discovered → planned → awaiting_decision → (handoff_pending)? → decided → submitted|shelved`. Queue snapshots are persisted to `run.json.decisions[]` so auto-mode runs can be audited after the fact.
 
 ```mermaid
 stateDiagram-v2
@@ -77,7 +105,7 @@ sequenceDiagram
   participant SCHED as Scheduler (optional)
   participant CLI as Typer CLI
   participant DEC as Decision Engine
-  participant BR as Browserâ€‘Use
+  participant BR as Browser†‘Use
   participant QUEUE as Review Queue
   participant HIST as Run Store
 

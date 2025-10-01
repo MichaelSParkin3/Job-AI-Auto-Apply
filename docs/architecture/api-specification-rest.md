@@ -137,6 +137,40 @@ paths:
               $ref: '#/components/schemas/SubmissionDecision'
       responses:
         '200': { description: OK }
+  /api/queue/{id}/candidate/{candidateId}/answers/{fieldKey}/decision:
+    post:
+      summary: Record reviewer action on a drafted answer
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: candidateId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: fieldKey
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DraftAnswerDecisionRequest'
+      responses:
+        '200':
+          description: Updated draft answer review payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  draftAnswer: { $ref: '#/components/schemas/DraftAnswerSummary' }
+                  queue: { $ref: '#/components/schemas/ReviewQueueSnapshot' }
+        '409':
+          description: Draft outdated; client must refetch before retrying
   /api/queue/{id}/{candidateId}/mode:
     put:
       summary: Override candidate lane assignment
@@ -232,6 +266,20 @@ components:
           type: array
           items: { $ref: '#/components/schemas/ApplicationCandidateSummary' }
         lastUpdated: { type: string, format: date-time }
+        answersTelemetry:
+          type: object
+          properties:
+            drafted: { type: integer }
+            approved: { type: integer }
+            savedToProfile: { type: integer }
+            averageConfidence: { type: number }
+            histogram:
+              type: array
+              items:
+                type: object
+                properties:
+                  bucket: { type: string }
+                  count: { type: integer }
     ApplicationCandidateSummary:
       type: object
       required: [id, posting, state, discoveredAt, assignedMode]
@@ -250,6 +298,30 @@ components:
         lastDecisionId: { type: string }
         assignedMode: { type: string, enum: [human, ai] }
         updatedAt: { type: string, format: date-time }
+        draftAnswers:
+          type: array
+          items: { $ref: '#/components/schemas/DraftAnswerSummary' }
+    DraftAnswerSummary:
+      type: object
+      required: [fieldKey, question, confidence, source, lastUpdatedAt]
+      properties:
+        fieldKey: { type: string }
+        question: { type: string }
+        draftedValuePreview: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        rationalePreview: { type: string }
+        source: { type: string, enum: [profile, override, resume, llm_draft] }
+        lastUpdatedAt: { type: string, format: date-time }
+        minConfidenceMet: { type: boolean }
+        reviewerStatus: { type: string, enum: [pending, approved, edited, rejected] }
+    DraftAnswerDecisionRequest:
+      type: object
+      required: [action, lastUpdatedAt]
+      properties:
+        action: { type: string, enum: [approve, approve_save, edit, edit_save] }
+        value: { type: string }
+        reviewerNotes: { type: string }
+        lastUpdatedAt: { type: string, format: date-time }
 ```
 
 ---
