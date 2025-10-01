@@ -206,7 +206,8 @@ Key selectors captured from production tenants:
 
 - Upload control: `input#resume-upload-input.application-file-input`
 - Success (analysis complete):
-  - `div.resume-upload-success`
+  - `span.resume-upload-success` (preferred)
+  - `div.resume-upload-success` (fallback)
   - `input#resume-upload-input.application-file-input[value]`
 - In-progress indicators (emit `RESUME_ANALYSIS_PROGRESS`):
   - `div.resume-upload-spinner`
@@ -236,6 +237,7 @@ Site-level defaults (`sites/lever/config.yaml`) mirror the observed markup; over
 ```yaml
 resume:
   success_selectors:
+    - "span.resume-upload-success"
     - "div.resume-upload-success"
     - "input#resume-upload-input.application-file-input[value]"
   working_selectors:
@@ -245,6 +247,7 @@ resume:
     - "div.resume-upload-error"
     - "div.resume-upload-failure"
   max_wait_seconds: 15
+  min_wait_seconds: 3   # do not accept DOM-stable or idle before this window
   poll_interval_ms: 300
 ```
 

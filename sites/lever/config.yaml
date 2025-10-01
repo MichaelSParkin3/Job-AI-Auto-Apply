@@ -1,5 +1,6 @@
 resume:
   success_selectors:
+    - "span.resume-upload-success"
     - "div.resume-upload-success"
     - "input#resume-upload-input.application-file-input[value]"
   working_selectors:
@@ -8,5 +9,6 @@ resume:
   failure_selectors:
     - "div.resume-upload-error"
     - "div.resume-upload-failure"
-  max_wait_seconds: 15
+  max_wait_seconds: 30
+  min_wait_seconds: 10
   poll_interval_ms: 300

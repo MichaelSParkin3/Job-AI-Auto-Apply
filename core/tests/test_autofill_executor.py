@@ -219,7 +219,7 @@ def test_executor_handles_upload_success(tmp_path: Path) -> None:
     assert any(event["event"] == "AUTOFILL_UPLOAD_SUCCESS" for event in events)
 
 
-def test_executor_emits_skip_telemetry_on_selector_exhaustion(tmp_path: Path) -> None:
+def test_executor_fills_when_screenshot_missing(tmp_path: Path) -> None:
     controller = StubController()
     controller.fail_selectors.add("input#name")
     controller.screenshot_fail_selectors.add("input#name-fallback")
@@ -249,11 +249,14 @@ def test_executor_emits_skip_telemetry_on_selector_exhaustion(tmp_path: Path) ->
     assert controller.fill_calls  # attempted fills
     assert controller.screenshot_calls
     execution = result.fields[0]
-    assert execution.status == "skipped"
-    assert execution.reason == "screenshot_failed"
+    assert execution.status == "filled"
+    assert execution.reason is None
     assert execution.value_hash is not None
+    assert execution.artifacts is not None
+    assert execution.artifacts.screenshot_path is None
+    assert any(event["event"] == "AUTOFILL_FIELD_FILLED" for event in events)
     assert any(
-        event["event"] == "AUTOFILL_FIELD_SKIPPED" and event.get("valueHash")
+        event["event"] == "AUTOFILL_FIELD_SCREENSHOT_MISSING"
         for event in events
     )
 

@@ -365,7 +365,14 @@ class AutofillExecutor:
         after_html = self._capture_html(plan, field, selector, suffix="after")
         screenshot = self._capture_screenshot(plan, field, selector)
         if screenshot is None:
-            return None, "screenshot_failed"
+            self._telemetry(
+                {
+                    "event": "AUTOFILL_FIELD_SCREENSHOT_MISSING",
+                    "candidateId": plan.candidate_id,
+                    "fieldKey": field.key,
+                    "selector": selector,
+                }
+            )
         artifact = FieldArtifact(
             key=field.key,
             screenshot_path=screenshot,

@@ -149,6 +149,14 @@ class BrowserClient(Protocol):
     def resolve_redirect(self, url: str) -> str:  # pragma: no cover - runtime protocol
         """Return the final resolved URL for the given target if possible."""
 
+    # Lightweight selector presence query used by resume analysis waiters
+    def query_selector(self, selector: str) -> Mapping[str, Any]:  # pragma: no cover - runtime protocol
+        """Return minimal presence metadata for a CSS selector (exists/count)."""
+
+    # Optional: visibility-aware selector query (computed style + rect)
+    def query_selector_visible(self, selector: str) -> Mapping[str, Any]:  # pragma: no cover - runtime protocol
+        """Return presence + visibility metadata for a selector (exists/count/visible/visibleCount)."""
+
 
 ClientFactory = Callable[[BrowserLaunchConfig], BrowserClient]
 
@@ -227,6 +235,20 @@ class BrowserSessionAdapter:
         output = Path(path)
         result = self._run(self._capture_review_screenshot(output))
         return result
+
+    def query_selector(self, selector: str) -> Dict[str, Any]:
+        """Synchronous shim around async selector query for controller use.
+
+        Returns a dict with keys: exists (bool) and count (int).
+        """
+        return self._run(self._query_selector(selector))
+
+    def query_selector_visible(self, selector: str) -> Dict[str, Any]:
+        """Synchronous shim for visibility-aware selector query.
+
+        Returns: { exists: bool, count: int, visible: bool, visibleCount: int }
+        """
+        return self._run(self._query_selector_visible(selector))
 
     def get_current_url(self) -> str:
         """Return the current page URL via a lightweight JS evaluation.
@@ -594,6 +616,34 @@ class BrowserSessionAdapter:
         if isinstance(result, bool):
             return {"exists": result, "count": 1 if result else 0}
         return {"exists": bool(result), "count": 1 if result else 0}
+
+    async def _query_selector_visible(self, selector: str) -> Dict[str, Any]:
+        await self._ensure_focus_ready()
+        expression = (
+            "(() => {\n"
+            f"  const selector = {json.dumps(selector)};\n"
+            "  const nodes = Array.from(document.querySelectorAll(selector));\n"
+            "  const isVisible = (el) => {\n"
+            "    if (!el || typeof el.getBoundingClientRect !== 'function') return false;\n"
+            "    const style = window.getComputedStyle(el);\n"
+            "    if (!style || style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;\n"
+            "    const rect = el.getBoundingClientRect();\n"
+            "    return !!(rect && rect.width > 0 && rect.height > 0);\n"
+            "  };\n"
+            "  const count = nodes.length;\n"
+            "  const visibleCount = nodes.filter(isVisible).length;\n"
+            "  return { exists: count > 0, count, visible: visibleCount > 0, visibleCount };\n"
+            "})()"
+        )
+        result = await self._evaluate_js(expression)
+        if isinstance(result, Mapping):
+            exists = bool(result.get("exists"))
+            count = int(result.get("count", 0)) if str(result.get("count", "")).isdigit() else (1 if exists else 0)
+            visible = bool(result.get("visible"))
+            visible_count = int(result.get("visibleCount", 0)) if str(result.get("visibleCount", "")).isdigit() else (1 if visible else 0)
+            return {"exists": exists, "count": count, "visible": visible, "visibleCount": visible_count}
+        base = await self._query_selector(selector)
+        return base | {"visible": base.get("exists", False), "visibleCount": base.get("count", 0)}
 
     async def _set_input_files(self, selector: str, paths: Sequence[str]) -> Dict[str, Any]:
         await self._ensure_focus_ready()
@@ -1709,9 +1759,14 @@ class BrowserUseController:
     def query_selector(self, selector: str) -> BrowserActionResult:
         """Return basic presence metadata for a CSS selector."""
 
+        client = self._ensure_client()
         payload = self._base_payload() | {"selector": selector}
         try:
-            result = self._run(self._query_selector(selector))
+            # Prefer a client-provided implementation; fallback to error
+            query = getattr(client, "query_selector", None)
+            if not callable(query):
+                raise AttributeError("client_query_selector_missing")
+            result = query(selector)
         except Exception as exc:  # pragma: no cover - defensive
             log_event(
                 {
@@ -1737,5 +1792,53 @@ class BrowserUseController:
         return BrowserActionResult(
             status=BrowserActionStatus.OK,
             details={"exists": exists, "response": {"exists": exists, "count": count}},
+            telemetry=telemetry,
+        )
+
+    def query_selector_visible(self, selector: str) -> BrowserActionResult:
+        """Return presence + visibility metadata for a CSS selector."""
+
+        client = self._ensure_client()
+        payload = self._base_payload() | {"selector": selector}
+        try:
+            query = getattr(client, "query_selector_visible", None)
+            if callable(query):
+                result = query(selector)
+            else:
+                # Fallback: basic presence only
+                result = getattr(client, "query_selector")(selector)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                {
+                    "level": "error",
+                    "event": "browser.selector_query.failed",
+                    "sessionId": self.session_id,
+                    "selector": selector,
+                    "error": str(exc),
+                }
+            )
+            return BrowserActionResult(
+                status=BrowserActionStatus.ERROR,
+                details={"error": str(exc)},
+                telemetry=payload,
+            )
+        exists = bool(result.get("exists"))
+        count = int(result.get("count", 0)) if isinstance(result, Mapping) else int(bool(result))
+        visible = bool(result.get("visible", exists))
+        visible_count = int(result.get("visibleCount", count))
+        telemetry = payload | {
+            "event": "browser.selector_query.ok",
+            "exists": exists,
+            "count": count,
+            "visible": visible,
+            "visibleCount": visible_count,
+        }
+        return BrowserActionResult(
+            status=BrowserActionStatus.OK,
+            details={
+                "exists": exists,
+                "visible": visible,
+                "response": {"exists": exists, "count": count, "visible": visible, "visibleCount": visible_count},
+            },
             telemetry=telemetry,
         )

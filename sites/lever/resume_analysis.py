@@ -27,6 +27,9 @@ class ResumeAnalysisSettings:
     working_selectors: Sequence[str] = field(default_factory=tuple)
     failure_selectors: Sequence[str] = field(default_factory=tuple)
     max_wait_seconds: float = 15.0
+    # Only allow DOM-stability fallback after at least this many seconds
+    # (does not delay explicit success/failure selectors)
+    min_wait_seconds: float = 3.0
     poll_interval_ms: int = 300
 
 
@@ -62,6 +65,7 @@ class ResumeAnalysisResult:
 
 _DEFAULT_SETTINGS = ResumeAnalysisSettings(
     success_selectors=(
+        "span.resume-upload-success",
         "div.resume-upload-success",
         "input#resume-upload-input.application-file-input[value]",
     ),
@@ -74,6 +78,7 @@ _DEFAULT_SETTINGS = ResumeAnalysisSettings(
         "div.resume-upload-failure",
     ),
     max_wait_seconds=15.0,
+    min_wait_seconds=3.0,
     poll_interval_ms=300,
 )
 
@@ -102,6 +107,7 @@ def load_resume_analysis_settings(base: Path | None = None) -> ResumeAnalysisSet
     working = _extract_selector_list(resume_data, "working_selectors") or _DEFAULT_SETTINGS.working_selectors
     failure = _extract_selector_list(resume_data, "failure_selectors") or _DEFAULT_SETTINGS.failure_selectors
     max_wait = _coerce_number(resume_data.get("max_wait_seconds"), default=_DEFAULT_SETTINGS.max_wait_seconds)
+    min_wait = _coerce_number(resume_data.get("min_wait_seconds"), default=_DEFAULT_SETTINGS.min_wait_seconds)
     poll_interval = int(
         _coerce_number(resume_data.get("poll_interval_ms"), default=_DEFAULT_SETTINGS.poll_interval_ms)
     )
@@ -110,6 +116,7 @@ def load_resume_analysis_settings(base: Path | None = None) -> ResumeAnalysisSet
         working_selectors=tuple(working),
         failure_selectors=tuple(failure),
         max_wait_seconds=float(max_wait),
+        min_wait_seconds=float(min_wait),
         poll_interval_ms=max(50, poll_interval),
     )
 
@@ -148,7 +155,7 @@ def wait_for_analysis(
         idle = controller.wait_for_idle(timeout=min(settings.max_wait_seconds, 3.0))
         idle_ok = idle.status is BrowserActionStatus.OK
 
-        failure_selector = _check_selectors(controller, settings.failure_selectors)
+        failure_selector = _check_selectors(controller, settings.failure_selectors, require_visible=True)
         if failure_selector:
             duration_ms = int((time.monotonic() - start) * 1000)
             telemetry(
@@ -167,7 +174,7 @@ def wait_for_analysis(
                 selector=failure_selector,
             )
 
-        success_selector = _check_selectors(controller, settings.success_selectors)
+        success_selector = _check_selectors(controller, settings.success_selectors, require_visible=True)
         if success_selector:
             duration_ms = int((time.monotonic() - start) * 1000)
             telemetry(
@@ -186,12 +193,13 @@ def wait_for_analysis(
                 selector=success_selector,
             )
 
+        working_visible_now = False
         for selector in settings.working_selectors:
             if selector in seen_working:
                 continue
-            result = controller.query_selector(selector)
-            if result.status is BrowserActionStatus.OK and _selector_exists(result):
+            if _query_exists(controller, selector, visible=True):
                 seen_working.add(selector)
+                working_visible_now = True
                 telemetry(
                     {
                         "event": "RESUME_ANALYSIS_PROGRESS",
@@ -199,6 +207,13 @@ def wait_for_analysis(
                         "elapsedMs": int((time.monotonic() - start) * 1000),
                     }
                 )
+        # Also consider currently-visible working selectors (even if previously seen)
+        if not working_visible_now:
+            # Check again across the list to detect ongoing progress visibility
+            for selector in settings.working_selectors:
+                if _query_exists(controller, selector, visible=True):
+                    working_visible_now = True
+                    break
 
         html_result = controller.get_page_html()
         if html_result.status is BrowserActionStatus.OK:
@@ -209,25 +224,35 @@ def wait_for_analysis(
                     if stable_since is None:
                         stable_since = time.monotonic()
                     elif time.monotonic() - stable_since >= poll_interval:
-                        duration_ms = int((time.monotonic() - start) * 1000)
-                        telemetry(
-                            {
-                                "event": "RESUME_ANALYSIS_DONE",
-                                "status": "ok",
-                                "reason": "dom_stable",
-                                "durationMs": duration_ms,
-                            }
-                        )
-                        return ResumeAnalysisResult(
-                            status="ok",
-                            waited_ms=duration_ms,
-                            reason="dom_stable",
-                        )
+                        # Only allow DOM-stable fallback if:
+                        #  - minimum wait window elapsed, and
+                        #  - no working indicators are currently visible
+                        if (
+                            (time.monotonic() - start) >= settings.min_wait_seconds
+                            and not working_visible_now
+                        ):
+                            duration_ms = int((time.monotonic() - start) * 1000)
+                            telemetry(
+                                {
+                                    "event": "RESUME_ANALYSIS_DONE",
+                                    "status": "ok",
+                                    "reason": "dom_stable",
+                                    "durationMs": duration_ms,
+                                }
+                            )
+                            return ResumeAnalysisResult(
+                                status="ok",
+                                waited_ms=duration_ms,
+                                reason="dom_stable",
+                            )
                 else:
                     last_hash = digest
                     stable_since = None
 
-        if idle_ok:
+        # Treat network-idle as completion only after we've observed analysis activity
+        # (i.e., a working selector showed up). This avoids immediately exiting on
+        # static forms where Browser-Use reports idle even though analysis hasn't run.
+        if idle_ok and len(seen_working) > 0 and not working_visible_now and (time.monotonic() - start) >= settings.min_wait_seconds:
             duration_ms = int((time.monotonic() - start) * 1000)
             telemetry(
                 {
@@ -287,10 +312,27 @@ def _coerce_number(value: object, *, default: float) -> float:
     return float(default)
 
 
-def _check_selectors(controller: BrowserUseController, selectors: Sequence[str]) -> str | None:
+def _query_exists(controller: BrowserUseController, selector: str, *, visible: bool) -> bool:
+    if visible:
+        query = getattr(controller, "query_selector_visible", None)
+        if callable(query):
+            result = query(selector)
+            if result.status is BrowserActionStatus.OK:
+                response = result.details.get("response")
+                if isinstance(response, Mapping):
+                    vis = response.get("visible")
+                    if isinstance(vis, bool):
+                        return vis
+                return _selector_exists(result)
+    result = controller.query_selector(selector)
+    return result.status is BrowserActionStatus.OK and _selector_exists(result)
+
+
+def _check_selectors(
+    controller: BrowserUseController, selectors: Sequence[str], *, require_visible: bool = False
+) -> str | None:
     for selector in selectors:
-        result = controller.query_selector(selector)
-        if result.status is BrowserActionStatus.OK and _selector_exists(result):
+        if _query_exists(controller, selector, visible=require_visible):
             return selector
     return None
 
