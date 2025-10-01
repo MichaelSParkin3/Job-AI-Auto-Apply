@@ -7,6 +7,7 @@
 - `id`: string — profile slug
 - `resumePath`: string — path to PDF
 - `qaOverrides`: Record<string,string> — question→answer map
+- `answers`: DraftedFieldAnswer[] — reviewer-approved answers with provenance
 
 ### TypeScript Interface
 ```ts
@@ -18,11 +19,46 @@ export interface Profile {
   };
   qaOverrides?: Record<string, string>;
   userDataDir: string; // persistent Chrome session dir
+  answers?: DraftedFieldAnswer[];
 }
 ```
 
 ### Relationships
 - Used by Run to parameterize automation
+- Reviewer-approved answers feed AnswerOrchestrator precedence
+
+### DraftedFieldAnswer
+**Purpose:** Persist reviewer-approved answers plus provenance metadata for reuse and analytics.
+
+**Key Attributes:**
+- `fieldId`: string — canonical Lever field identifier
+- `valueHash`: string — SHA-256 hash of stored answer
+- `displayValue`: string — truncated preview (no PII beyond first/last char)
+- `source`: `profile|resume_fact|llm|manual`
+- `confidenceHistory`: array of `{confidence: number, recordedAt: string}`
+- `lastReviewedBy`: string — reviewer identifier
+- `lastReviewedAt`: string — ISO timestamp
+- `policy`: AnswerPolicy snapshot at approval time
+
+```ts
+export interface DraftedFieldAnswer {
+  fieldId: string;
+  valueHash: string;
+  displayValue: string;
+  source: "profile" | "resume_fact" | "llm" | "manual";
+  confidenceHistory: Array<{ confidence: number; recordedAt: string }>;
+  lastReviewedBy?: string;
+  lastReviewedAt?: string;
+  policy: AnswerPolicySnapshot;
+}
+
+export interface AnswerPolicySnapshot {
+  minConfidence: number;
+  allowSaveToProfile: boolean;
+  allowLLMFallback: boolean;
+  model: string;
+}
+```
 
 ## JobPosting
 **Purpose:** Captured metadata and full description for dedupe and audit.
@@ -86,10 +122,26 @@ export interface RunRecord {
     error?: string;
     retried?: boolean;
   };
+  answers?: AnswerOutcomeRecord[];
+  answerPolicy?: AnswerPolicySnapshot;
   artifactsDir: string;
   logsPath: string; // redacted step log
   decisions: SubmissionDecision[];
   queue: ReviewQueueSnapshot;
+}
+```
+
+```ts
+export interface AnswerOutcomeRecord {
+  fieldId: string;
+  valueHash: string;
+  source: "profile" | "resume_fact" | "cached" | "llm" | "manual";
+  confidence?: number;
+  rationaleDigest?: string;
+  model?: string;
+  draftedAt: string;
+  latencyMs?: number;
+  fallbackReason?: "validation_failed" | "low_confidence" | "timeout" | "provider_error";
 }
 ```
 

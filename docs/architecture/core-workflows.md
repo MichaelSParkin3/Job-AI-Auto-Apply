@@ -30,7 +30,18 @@ sequenceDiagram
   - `HumanDecisionEngine` subscribes to preview UI events; the queue pauses while waiting for a person to respond.
   - `LLMDecisionEngine` consumes queue entries asynchronously, scoring each candidate and auto-resolving when confidence â‰¥ threshold, otherwise returning `needs_review` to fall back to the human queue.
   - `AutoFillOrchestrator` replays Browser-Use steps and submit attempts; it emits `AUTOFILL_*` telemetry and packages `handoff_pending` snapshots when blockers appear.
-- **Queue states** evolve deterministically: `discovered â†’ planned â†’ awaiting_decision â†’ (handoff_pending)? â†’ decided â†’ submitted|shelved`. Queue snapshots are persisted to `run.json.decisions[]` so auto-mode runs can be audited after the fact.
+- **Queue states** evolve deterministically: `discovered → planned → awaiting_decision → (handoff_pending)? → decided → submitted|shelved`. Queue snapshots are persisted to `run.json.decisions[]` so auto-mode runs can be audited after the fact.
+
+## AI Answer Generation Loop (Epic 5A)
+
+1. **Field Discovery** — Planner/executor enumerates Lever form fields (Story 5.1) and normalises metadata (id, label, type, validation).
+2. **Answer Request** — For each unanswered field, CLI invokes `AnswerOrchestrator.draft_answer` with run context, resume/profile snippets, and resolved policy (CLI → profile → global config).
+3. **Deterministic Short-Circuit** — If a profile answer or resume fact exists, the orchestrator returns immediately with `source="profile"|"resume_fact"`, recording provenance without contacting the LLM.
+4. **LLM Draft** — When deterministic data is missing, orchestrator builds a redacted `AnswerDraftRequest` and calls the configured OpenRouter model. Responses must satisfy schema validation, max length, and confidence threshold checks before being accepted.
+5. **Fallback & Telemetry** — Invalid responses trigger fallback to deterministic strategies, emit `AI_FIELD_DRAFT_FAILED`, and mark the field for manual input. Successful drafts emit `AI_FIELD_DRAFTED` and persist hashed artifacts under `runs/<id>/answers/`.
+6. **Executor Consumption** — Autofill executor consumes returned `AnswerOutcome` values, prefilling Browser-Use actions or skipping when policy requires reviewer approval.
+7. **Reviewer Loop** — Preview UI surfaces drafted answers with confidence/rationale metadata (Story 5.4). Reviewer decisions feed back into the orchestrator cache via `record_feedback` and persist to profile answers (Story 5.5).
+8. **Analytics** — Run summaries aggregate drafted/approved/rejected counts, exposing them to telemetry dashboards and nightly reports.
 
 ```mermaid
 stateDiagram-v2
