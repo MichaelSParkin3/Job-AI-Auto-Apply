@@ -1,33 +1,47 @@
-id: 5.3-ai-answer-orchestrator
-name: AI Answer Orchestrator & Drafting Pipeline
-status: ready
-owner: QA (Test Architect)
-last_updated: 2025-01-15
-preconditions:
-  - Story 5.1 planner telemetry fixtures available
-  - Story 5.2 headful executor + resume-first ordering deployed
-  - OpenRouter key configured (or stub client injected) for draft tests
-validation_steps:
-  - step: Verify AnswerOrchestrator precedence
-    commands:
-      - pytest core/tests/test_answer_orchestrator.py -q
-    expected: Profile answers bypass LLM calls; resume facts reused when present.
-  - step: Validate LLM schema + fallback behaviour
-    commands:
-      - pytest core/tests/test_answer_orchestrator_llm.py -q
-    expected: Invalid responses emit AI_FIELD_DRAFT_FAILED and fall back to deterministic values.
-  - step: Inspect run artifacts for drafted answers
-    manual:
-      - Open runs/<runId>/answers/summary.md
-      - Confirm hashes only; rationale digests truncated <=512 chars.
-  - step: Confirm telemetry export
-    commands:
-      - python scripts/report_ai_answer_quality.py --sample runs/<runId>
-    expected: Drafted/approved/rejected counts align with run.json answers[] data.
-  - step: Privacy spot-check
-    manual:
-      - Inspect runs/<runId>/autofill/prompts/*.json
-      - Ensure no raw PII present (only hashed tokens/value lengths).
-exit_criteria:
-  - All validation steps complete without blocking defects
-  - QA sign-off recorded in docs/stories/5.3.ai-answer-orchestrator.md#qa-notes
+schema: 1
+story: '5.3'
+story_title: 'AI Answer Orchestrator & Drafting Pipeline'
+gate: FAIL
+status_reason: 'Cached answer provenance is misreported when pulling from the per-run cache, and CLI override behaviours remain untested.'
+reviewer: 'QA (Test Architect)'
+updated: '2025-01-17T00:00:00Z'
+
+top_issues:
+  - id: AC1
+    title: 'Cached answer provenance misreported'
+    severity: MAJOR
+    detail: 'AnswerOrchestrator returns cached outcomes without updating the source to `cached`, so run.json and telemetry cannot distinguish reused drafts from fresh resume/LLM answers, violating the precedence provenance contract.'
+  - id: TEST
+    title: 'Missing automated coverage for answer policy CLI overrides'
+    severity: MINOR
+    detail: 'No pytest covers the new --no-answer-llm / --min-answer-confidence / --answer-model flags, leaving policy precedence and run.json persistence unguarded (AC4).' 
+
+waiver:
+  active: false
+
+quality_score: 55
+expires: '2025-01-24T00:00:00Z'
+
+evidence:
+  tests_reviewed: 2
+  risks_identified: 2
+  trace:
+    ac_covered: [1, 2, 3]
+    ac_gaps: [4, 5]
+    notes: 'Executed pytest core/tests/test_answer_orchestrator.py and pytest core/tests/test_answer_orchestrator_llm.py to validate precedence handling, fallback telemetry, and artifact persistence; review of AnswerCache reuse exposed provenance defect.'
+
+nfr_validation:
+  _assessed: [auditability, observability]
+  auditability:
+    status: WARN
+    notes: 'Markdown artifacts persist hashed values, but cached reuse is indistinguishable, limiting reviewer traceability.'
+  observability:
+    status: WARN
+    notes: 'Telemetry cannot signal cached hits because AnswerSource.CACHED is never emitted.'
+
+recommendations:
+  immediate:
+    - 'Mark cached reuse with AnswerSource.CACHED, persist an explicit provenance indicator, and extend unit tests to assert the corrected source in run.json and telemetry.'
+    - 'Add CLI integration tests exercising --no-answer-llm and min confidence overrides to guard policy resolution and run.json answerPolicy snapshots.'
+  future:
+    - 'Introduce executor-level regression ensuring cached answers short-circuit Browser-Use actions and emit AI_FIELD_DRAFT_SKIPPED once reviewer flows land.'
