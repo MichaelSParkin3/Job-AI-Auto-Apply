@@ -81,26 +81,45 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
   "$defs": {
     "AnswerOutcomeRecord": {
       "type": "object",
-      "required": ["fieldId", "valueHash", "source", "draftedAt"],
+      "required": ["fieldId", "source", "draftedAt", "artifactPath", "markdownPath"],
       "properties": {
         "fieldId": { "type": "string" },
-        "valueHash": { "type": "string" },
+        "valueHash": { "type": "string", "nullable": true },
         "source": { "type": "string", "enum": ["profile", "resume_fact", "cached", "llm", "manual"] },
+        "cachedFrom": {
+          "type": "string",
+          "enum": ["profile", "resume_fact", "llm", "manual"],
+          "nullable": true
+        },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1, "nullable": true },
         "rationaleDigest": { "type": "string", "nullable": true },
         "model": { "type": "string", "nullable": true },
         "draftedAt": { "type": "string", "format": "date-time" },
         "latencyMs": { "type": "integer", "minimum": 0, "nullable": true },
-        "fallbackReason": { "type": "string", "enum": ["validation_failed", "low_confidence", "timeout", "provider_error"], "nullable": true }
+        "fallbackReason": {
+          "type": "string",
+          "enum": [
+            "validation_failed",
+            "low_confidence",
+            "timeout",
+            "provider_error",
+            "policy_disabled",
+            "missing_context"
+          ],
+          "nullable": true
+        },
+        "artifactPath": { "type": "string" },
+        "markdownPath": { "type": "string" }
       }
     },
     "AnswerPolicySnapshot": {
       "type": "object",
-      "required": ["minConfidence", "allowSaveToProfile", "allowLLMFallback", "model"],
+      "required": ["enabled", "min_confidence", "allow_save_to_profile", "allow_llm_fallback", "model"],
       "properties": {
-        "minConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
-        "allowSaveToProfile": { "type": "boolean" },
-        "allowLLMFallback": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "min_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "allow_save_to_profile": { "type": "boolean" },
+        "allow_llm_fallback": { "type": "boolean" },
         "model": { "type": "string" }
       }
     },
