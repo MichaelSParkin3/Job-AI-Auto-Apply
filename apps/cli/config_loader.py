@@ -49,6 +49,15 @@ DEFAULTS = {
         "model": "deepseek/deepseek-chat-v3.1:free",
         "llm_enabled": True,
     },
+    "automation": {
+        "answerPolicies": {
+            "enabled": True,
+            "minConfidence": 0.75,
+            "allowSaveToProfile": True,
+            "allowLLMFallback": True,
+            "model": "openrouter/mistral-small",
+        }
+    },
 }
 
 
@@ -166,6 +175,7 @@ def load_env(base: Path | None = None) -> Dict[str, Any]:
     }
     if env_config.get("OPENROUTER_MODEL"):
         env_config["plan.model"] = env_config["OPENROUTER_MODEL"]
+        env_config["automation.answerPolicies.model"] = env_config["OPENROUTER_MODEL"]
     if google_cse_key := os.environ.get("GOOGLE_CSE_KEY"):
         env_config["plan.google_cse_key"] = google_cse_key
     if google_cse_cx := os.environ.get("GOOGLE_CSE_CX"):
@@ -269,6 +279,11 @@ class Settings:
     # Derived/env
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
+    answer_policies_enabled: bool = DEFAULTS["automation"]["answerPolicies"]["enabled"]
+    answer_policies_min_confidence: float = DEFAULTS["automation"]["answerPolicies"]["minConfidence"]
+    answer_policies_allow_save_to_profile: bool = DEFAULTS["automation"]["answerPolicies"]["allowSaveToProfile"]
+    answer_policies_allow_llm_fallback: bool = DEFAULTS["automation"]["answerPolicies"]["allowLLMFallback"]
+    answer_policies_model: str = DEFAULTS["automation"]["answerPolicies"]["model"]
 
     @classmethod
     def load(
@@ -348,6 +363,32 @@ class Settings:
             data["plan_model"] = str(data["plan_model"])
         if "plan_llm_enabled" in data and data["plan_llm_enabled"] is not None:
             data["plan_llm_enabled"] = _to_bool(data["plan_llm_enabled"])
+        automation_dict = data.pop("automation", {}) or {}
+
+        def _assign_answer_policy(target: Dict[str, Any], key: str, value: Any) -> None:
+            if value is None:
+                return
+            if key == "enabled":
+                target["answer_policies_enabled"] = _to_bool(value)
+            elif key == "minConfidence":
+                target["answer_policies_min_confidence"] = float(value)
+            elif key == "allowSaveToProfile":
+                target["answer_policies_allow_save_to_profile"] = _to_bool(value)
+            elif key == "allowLLMFallback":
+                target["answer_policies_allow_llm_fallback"] = _to_bool(value)
+            elif key == "model":
+                target["answer_policies_model"] = str(value)
+
+        if isinstance(automation_dict, dict):
+            answer_dict = automation_dict.get("answerPolicies") or {}
+            if isinstance(answer_dict, dict):
+                for key, value in answer_dict.items():
+                    _assign_answer_policy(data, str(key), value)
+        for dotted_key in [
+            key for key in list(data.keys()) if key.startswith("automation.answerPolicies.")
+        ]:
+            _, subkey = dotted_key.split("answerPolicies.", 1)
+            _assign_answer_policy(data, subkey, data.pop(dotted_key))
         # Allow nested browser config in YAML/env overrides (browser.* keys)
         browser_dict = data.pop("browser", {}) or {}
         if isinstance(browser_dict, dict):
@@ -460,6 +501,9 @@ class Settings:
                         processed["browser_session_backups_enabled"] = _to_bool(value)
                     elif subkey == "retention":
                         processed["browser_session_backups_retention"] = int(value)
+                elif key.startswith("automation.answerPolicies."):
+                    _, subkey = key.split("answerPolicies.", 1)
+                    _assign_answer_policy(processed, subkey, value)
                 elif key.startswith("plan."):
                     _, subkey = key.split(".", 1)
                     _assign_plan_option(processed, subkey, value)
@@ -539,6 +583,20 @@ class Settings:
         else:
             data["plan_google_cse_cx"] = None
         return cls(**data)
+
+    def base_answer_policy(self):
+        """Return the base AnswerPolicy derived from settings."""
+
+        from core.answers import AnswerPolicy as _AnswerPolicy
+
+        model = self.answer_policies_model or self.browser_model
+        return _AnswerPolicy(
+            enabled=bool(self.answer_policies_enabled),
+            min_confidence=float(self.answer_policies_min_confidence),
+            allow_save_to_profile=bool(self.answer_policies_allow_save_to_profile),
+            allow_llm_fallback=bool(self.answer_policies_allow_llm_fallback),
+            model=str(model),
+        )
 
     def to_json(self) -> str:
         """Serialize the settings object to a JSON string.

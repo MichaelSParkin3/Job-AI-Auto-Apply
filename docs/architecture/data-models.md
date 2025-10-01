@@ -34,7 +34,8 @@ export interface Profile {
 - `fieldId`: string — canonical Lever field identifier
 - `valueHash`: string — SHA-256 hash of stored answer
 - `displayValue`: string — truncated preview (no PII beyond first/last char)
-- `source`: `profile|resume_fact|llm|manual`
+- `source`: `profile|resume_fact|cached|llm|manual`
+- `cachedFrom`: `profile|resume_fact|llm|manual|null` — provenance of cached reuse
 - `confidenceHistory`: array of `{confidence: number, recordedAt: string}`
 - `lastReviewedBy`: string — reviewer identifier
 - `lastReviewedAt`: string — ISO timestamp
@@ -45,7 +46,8 @@ export interface DraftedFieldAnswer {
   fieldId: string;
   valueHash: string;
   displayValue: string;
-  source: "profile" | "resume_fact" | "llm" | "manual";
+  source: "profile" | "resume_fact" | "cached" | "llm" | "manual";
+  cachedFrom?: "profile" | "resume_fact" | "llm" | "manual";
   confidenceHistory: Array<{ confidence: number; recordedAt: string }>;
   lastReviewedBy?: string;
   lastReviewedAt?: string;
@@ -131,6 +133,8 @@ export interface RunRecord {
 }
 ```
 
+- `artifacts.answers.summary` records the Markdown digest for drafted answers (hashes + confidence only).
+
 ```ts
 export interface AnswerOutcomeRecord {
   fieldId: string;
@@ -142,6 +146,7 @@ export interface AnswerOutcomeRecord {
   draftedAt: string;
   latencyMs?: number;
   fallbackReason?: "validation_failed" | "low_confidence" | "timeout" | "provider_error";
+  artifactPath: string;
 }
 ```
 
