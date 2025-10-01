@@ -59,6 +59,11 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
         "retried": { "type": "boolean" }
       }
     },
+    "answers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/AnswerOutcomeRecord" }
+    },
+    "answerPolicy": { "$ref": "#/$defs/AnswerPolicySnapshot" },
     "artifactsDir": { "type": "string" },
     "logsPath": { "type": "string" },
     "decisions": {
@@ -74,6 +79,31 @@ MVP uses file‑first storage. JSON Schemas help validate structure; optional SQ
 
 ```json
   "$defs": {
+    "AnswerOutcomeRecord": {
+      "type": "object",
+      "required": ["fieldId", "valueHash", "source", "draftedAt"],
+      "properties": {
+        "fieldId": { "type": "string" },
+        "valueHash": { "type": "string" },
+        "source": { "type": "string", "enum": ["profile", "resume_fact", "cached", "llm", "manual"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1, "nullable": true },
+        "rationaleDigest": { "type": "string", "nullable": true },
+        "model": { "type": "string", "nullable": true },
+        "draftedAt": { "type": "string", "format": "date-time" },
+        "latencyMs": { "type": "integer", "minimum": 0, "nullable": true },
+        "fallbackReason": { "type": "string", "enum": ["validation_failed", "low_confidence", "timeout", "provider_error"], "nullable": true }
+      }
+    },
+    "AnswerPolicySnapshot": {
+      "type": "object",
+      "required": ["minConfidence", "allowSaveToProfile", "allowLLMFallback", "model"],
+      "properties": {
+        "minConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "allowSaveToProfile": { "type": "boolean" },
+        "allowLLMFallback": { "type": "boolean" },
+        "model": { "type": "string" }
+      }
+    },
     "SubmissionDecision": {
       "type": "object",
       "required": [

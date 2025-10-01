@@ -66,6 +66,13 @@
 - CLI `python app.py apply plan --mode ai_autofill` launches headful Browser-Use, announces plan readiness, streams executor progress, and persists session handles via `RunStore.record_browser_session` (sessionId, user-data-dir, CDP endpoint, window handle) for crash recovery.
 - Guardrail or action failures surface structured skip reasons while leaving the session interactive for manual intervention. Dry-run mode short-circuits executor dispatch but still emits telemetry so QA can validate sequencing without touching the DOM.
 
+### Answer Orchestrator (Epic 5A)
+- `core/answers/orchestrator.AnswerOrchestrator` resolves field answers before execution. It enforces precedence (profile overrides → resume facts → cached run answers → LLM draft) and returns `AnswerOutcome` payloads consumed by the planner/executor. Provenance is written to `run.json.answers[]` and artifacts under `runs/<id>/answers/`.
+- `core/answers/models` defines `AnswerDraftRequest`/`AnswerDraftResponse` and enumerations for `AnswerSource`, `AnswerPolicy`, and `FallbackReason`. Requests include redacted resume/profile snippets, validation metadata, and locale/timezone hints; responses require bounded rationale text and machine-readable confidence (0–1 float).
+- `core/answers/prompt` sanitises prompts using redaction helpers, enforces token/timeout budgets, and logs hashed previews. It relies on the shared OpenRouter client factory (`core/llm/client.py`) and supports provider metadata for future model selection.
+- Telemetry events `AI_FIELD_DRAFTED`, `AI_FIELD_DRAFT_FAILED`, and `AI_FIELD_DRAFT_SKIPPED` feed monitoring dashboards. Summaries in Markdown expose rationale digests for reviewers without revealing raw PII.
+- CLI config adds `automation.answerPolicies` (min confidence, allowSaveToProfile, allowLLMFallback, model). Flags `--no-answer-llm`, `--answer-model`, and `--min-answer-confidence` override profile/default settings to support QA scenarios.
+
 ## Artifact & History Store
 **Responsibility:** Persist screenshots, `run.json`, HTML snapshot, redacted `actions.log`, append `history.jsonl`.
 

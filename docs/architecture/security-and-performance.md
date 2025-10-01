@@ -14,6 +14,11 @@
 - Handoff Snapshot Redaction: Saved form state stores hashed values + widget metadata only; raw answers never persist outside Browser-Use memory.
 - Prompt Redaction: Store AI prompts/responses encrypted-at-rest (local key) with hashes in logs; redact JD snippets beyond 500 characters.
 
+### AI Answer Governance
+- AnswerOrchestrator strips PII before drafting, enforces profile confidence thresholds, logs hashed value lengths only, and retries OpenRouter at most twice before falling back to deterministic answers.
+- Reviewer approvals and profile saves record provenance metadata so contaminated answers can be rolled back.
+- Telemetry dashboards monitor drafted/approved/rejected counts; alert when rejection rate exceeds policy thresholds.
+
 **Authentication Security**
 - OpenRouter: Key from `.env.local`; never persisted in artifacts
 - Logs: PII redaction in `actions.log`; only `run.json` stores PII
@@ -29,5 +34,6 @@
 - Database Optimization: N/A (file I/O); minimize sync blocking
 - Caching: In‑process memo for small lookups
 - Decision Engine SLA: AI decisions should complete within 8s p95; queue watchdog escalates items exceeding 30s without response. Auto fill attempts should either submit or emit a handoff within 15s of final field entry to avoid session expiry.
+- Answer Draft SLA: Orchestrator requests should resolve within 6s p95 (including retries); fallback path must complete within 7s overall to keep Browser-Use flows responsive. Confidence calculations and artifact writes must add <150ms per field.
 
 ---
